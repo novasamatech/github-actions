@@ -5,7 +5,7 @@ Upload files or directories to S3-compatible storage (Scaleway, AWS S3, MinIO, e
 ## Usage
 
 ```yaml
-- uses: your-org/github-actions-repo/s3-upload@v1
+- uses: novasamatech/github-actions/s3-upload@v1
   with:
     s3_region: pl-waw
     s3_access_key: ${{ secrets.SCW_ACCESS_KEY }}

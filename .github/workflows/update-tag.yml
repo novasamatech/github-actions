@@ -1,0 +1,48 @@
+# Copyright © 2025 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: Update Version Tags
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  update-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update tags
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Read version from .version file
+          VERSION=$(cat .version | tr -d '[:space:]')
+          echo "📦 Version from .version file: $VERSION"
+
+          # Extract major version (e.g., v1.0.2 -> v1)
+          MAJOR_VERSION=$(echo "$VERSION" | cut -d. -f1)
+          echo "🔢 Major version: $MAJOR_VERSION"
+
+          # Update full version tag
+          git tag -d "$VERSION" 2>/dev/null || true
+          git push origin ":refs/tags/$VERSION" 2>/dev/null || true
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+          echo "✅ Tag $VERSION created/updated"
+
+          # Update major version tag
+          git tag -d "$MAJOR_VERSION" 2>/dev/null || true
+          git push origin ":refs/tags/$MAJOR_VERSION" 2>/dev/null || true
+          git tag -a "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
+          git push origin "$MAJOR_VERSION"
+          echo "✅ Tag $MAJOR_VERSION updated to point to $VERSION"

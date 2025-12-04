@@ -1,40 +1,40 @@
 # Copyright © 2025 Novasama Technologies GmbH
 # SPDX-License-Identifier: Apache-2.0
 
-name: 'Upload to S3'
-description: 'Upload files or directories to S3-compatible storage'
+name: "Upload to S3"
+description: "Upload files or directories to S3-compatible storage"
 
 inputs:
   s3_region:
-    description: 'S3 region'
+    description: "S3 region"
     required: true
   s3_access_key:
-    description: 'S3 access key'
+    description: "S3 access key"
     required: true
   s3_secret_key:
-    description: 'S3 secret key'
+    description: "S3 secret key"
     required: true
   s3_bucket:
-    description: 'S3 bucket (e.g., s3://my-bucket)'
+    description: "S3 bucket (e.g., s3://my-bucket)"
     required: true
   source_path:
-    description: 'File or directory path to upload'
+    description: "File or directory path to upload"
     required: true
   destination_path:
-    description: 'Destination path in bucket'
+    description: "Destination path in bucket"
     required: true
   provider:
-    description: 'S3 provider'
+    description: "S3 provider"
     required: false
-    default: 'scaleway'
+    default: "scaleway"
   acl:
-    description: 'Access control'
+    description: "Access control (public or private)"
     required: false
-    default: 'public-read'
+    default: "public"
 
 outputs:
   uploaded_path:
-    description: 'Full S3 path'
+    description: "Full S3 path"
     value: ${{ steps.upload.outputs.path }}
 
 runs:
@@ -55,7 +55,7 @@ runs:
         SOURCE="${{ inputs.source_path }}"
         DEST="${{ inputs.s3_bucket }}${{ inputs.destination_path }}"
         ACL="${{ inputs.acl }}"
-        
+
         if [ -d "$SOURCE" ]; then
           echo "📁 Uploading directory: $SOURCE"
           s3cmd sync "$SOURCE" "$DEST" --acl-$ACL
@@ -66,6 +66,6 @@ runs:
           echo "❌ Error: $SOURCE not found"
           exit 1
         fi
-        
+
         echo "path=$DEST" >> $GITHUB_OUTPUT
         echo "✅ Uploaded to: $DEST"

@@ -1,0 +1,93 @@
+# Copyright © 2025 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: Trigger Allure TestOps Job
+
+description: Trigger Allure TestOps job with specified parameters
+
+inputs:
+  job_id:
+    description: 'Allure TestOps Job ID'
+    required: true
+    default: '304'
+  branch:
+    description: 'Branch to run tests from'
+    required: true
+    default: 'master'
+  launch_name:
+    description: 'Launch name in Allure TestOps'
+    required: false
+    default: 'Android Tests'
+  allure_endpoint:
+    description: 'Allure TestOps endpoint URL'
+    required: false
+    default: 'https://nova.testops.cloud'
+  allure_token:
+    description: 'Allure TestOps API token'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get JWT Token
+      id: get-token
+      shell: bash
+      run: |
+        echo "Getting JWT token from Allure TestOps..."
+        
+        RESPONSE=$(curl -s -X POST "${{ inputs.allure_endpoint }}/api/uaa/oauth/token" \
+          --header "Accept: application/json" \
+          --form "grant_type=apitoken" \
+          --form "scope=openid" \
+          --form "token=${{ inputs.allure_token }}")
+        
+        JWT_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+        
+        if [ "$JWT_TOKEN" == "null" ] || [ -z "$JWT_TOKEN" ]; then
+          echo "Failed to get JWT token"
+          echo "$RESPONSE"
+          exit 1
+        fi
+        
+        echo "JWT token obtained successfully"
+        echo "jwt_token=$JWT_TOKEN" >> $GITHUB_OUTPUT
+
+    - name: Trigger Job
+      shell: bash
+      run: |
+        LAUNCH_NAME="${{ inputs.launch_name }}"
+        if [ -z "$LAUNCH_NAME" ]; then
+          LAUNCH_NAME="Android Tests - ${{ inputs.branch }}"
+        fi
+        
+        echo "Triggering job ${{ inputs.job_id }} with branch: ${{ inputs.branch }}"
+        echo "Launch name: $LAUNCH_NAME"
+        
+        RESPONSE=$(curl -s -X POST "${{ inputs.allure_endpoint }}/api/rs/job/${{ inputs.job_id }}/run" \
+          --header "Accept: application/json" \
+          --header "Content-Type: application/json" \
+          --header "Authorization: Bearer ${{ steps.get-token.outputs.jwt_token }}" \
+          --data "{
+            \"launchName\": \"$LAUNCH_NAME\",
+            \"parameters\": [
+              {
+                \"id\": ${{ inputs.job_id }},
+                \"value\": \"${{ inputs.branch }}\"
+              }
+            ]
+          }")
+        
+        echo "Response:"
+        echo "$RESPONSE" | jq .
+        
+        LAUNCH_ID=$(echo "$RESPONSE" | jq -r '.id')
+        
+        if [ "$LAUNCH_ID" == "null" ] || [ -z "$LAUNCH_ID" ]; then
+          echo "❌ Failed to trigger job"
+          exit 1
+        fi
+        
+        echo ""
+        echo "✅ Job triggered successfully!"
+        echo "📊 Launch ID: $LAUNCH_ID"
+        echo "🔗 Launch URL: ${{ inputs.allure_endpoint }}/launch/$LAUNCH_ID"

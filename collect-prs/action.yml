@@ -1,0 +1,140 @@
+# Copyright © 2025 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: "Collect Merged PRs"
+description: "Collects merged pull requests within a specified time window and generates release notes"
+
+inputs:
+  github_token:
+    description: "GitHub token for API access"
+    required: true
+  base_branch:
+    description: "Target branch to filter PRs (only PRs merged into this branch will be collected)"
+    required: true
+  since:
+    description: "Collect PRs merged after this timestamp (ISO 8601 format, e.g. 2025-01-20T12:00:00Z). If empty, defaults to last 24 hours"
+    required: false
+    default: ""
+  release_title:
+    description: "Title template for release notes. Supports placeholders: {date}, {version_name}, {version_code}"
+    required: false
+    default: ""
+  version_name:
+    description: "Version name to include in release notes"
+    required: false
+    default: ""
+  version_code:
+    description: "Version code to include in release notes"
+    required: false
+    default: ""
+
+outputs:
+  should_build:
+    description: "Whether there are merged PRs to build (true/false)"
+    value: ${{ steps.collect.outputs.should_build }}
+  release_notes:
+    description: "Generated release notes from merged PRs"
+    value: ${{ steps.collect.outputs.release_notes }}
+  pr_count:
+    description: "Number of merged PRs found"
+    value: ${{ steps.collect.outputs.pr_count }}
+  pr_numbers:
+    description: "Comma-separated list of merged PR numbers"
+    value: ${{ steps.collect.outputs.pr_numbers }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Collect merged PRs
+      id: collect
+      uses: actions/github-script@v7
+      env:
+        INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
+        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_RELEASE_TITLE: ${{ inputs.release_title }}
+        INPUT_VERSION_NAME: ${{ inputs.version_name }}
+        INPUT_VERSION_CODE: ${{ inputs.version_code }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const { owner, repo } = context.repo;
+          const baseBranch = process.env.INPUT_BASE_BRANCH;
+          const sinceInput = process.env.INPUT_SINCE;
+
+          let since;
+          if (sinceInput) {
+            since = new Date(sinceInput);
+            if (isNaN(since.getTime())) {
+              core.setFailed(`Invalid 'since' timestamp: ${sinceInput}. Use ISO 8601 format (e.g. 2025-01-20T12:00:00Z)`);
+              return;
+            }
+            core.info(`Checking for PRs merged since: ${since.toISOString()} (from input)`);
+          } else {
+            since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            core.info(`Checking for PRs merged since: ${since.toISOString()} (last 24 hours)`);
+          }
+
+          core.info(`Filtering PRs merged into branch: ${baseBranch}`);
+
+          const prs = await github.paginate(github.rest.pulls.list, {
+            owner,
+            repo,
+            state: "closed",
+            base: baseBranch,
+            sort: "updated",
+            direction: "desc",
+            per_page: 100,
+          });
+
+          core.info(`Total closed PRs fetched for branch '${baseBranch}': ${prs.length}`);
+
+          const merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
+
+          core.info(`Merged PRs since ${since.toISOString()}: ${merged.length}`);
+
+          if (merged.length > 0) {
+            core.info("Merged PRs:");
+            merged.forEach(pr => {
+              core.info(`  - #${pr.number}: ${pr.title} (merged: ${pr.merged_at})`);
+            });
+          }
+
+          core.setOutput("pr_count", merged.length.toString());
+          core.setOutput("pr_numbers", merged.map(pr => pr.number).join(","));
+
+          if (merged.length === 0) {
+            core.warning(`No pull requests merged into '${baseBranch}' since ${since.toISOString()}.`);
+            core.setOutput("should_build", "false");
+            core.setOutput("release_notes", "");
+            return;
+          }
+
+          const lines = [];
+
+          const releaseTitle = process.env.INPUT_RELEASE_TITLE;
+          const versionName = process.env.INPUT_VERSION_NAME;
+          const versionCode = process.env.INPUT_VERSION_CODE;
+
+          if (releaseTitle) {
+            const date = new Date().toISOString().split('T')[0];
+            const title = releaseTitle
+              .replace('{date}', date)
+              .replace('{version_name}', versionName || '')
+              .replace('{version_code}', versionCode || '');
+            lines.push(title);
+            lines.push("");
+          }
+
+          lines.push(`Merged pull requests:`);
+          for (const pr of merged) {
+            lines.push(`- #${pr.number}: ${pr.title} ${pr.html_url}`);
+          }
+
+          const notes = lines.join("\n");
+
+          core.notice(`Found ${merged.length} merged PR(s)`);
+          core.info("Release notes:");
+          core.info(notes);
+
+          core.setOutput("should_build", "true");
+          core.setOutput("release_notes", notes);

@@ -11,8 +11,12 @@ inputs:
   base_branch:
     description: "Target branch to filter PRs (only PRs merged into this branch will be collected)"
     required: true
-  since:
-    description: "Collect PRs merged after this timestamp (ISO 8601 format, e.g. 2025-01-20T12:00:00Z). If empty, defaults to last 24 hours"
+  hours:
+    description: "Time window in hours to look back for merged PRs (ignored if since_pr is set)"
+    required: false
+    default: "24"
+  since_pr:
+    description: "PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring hours parameter"
     required: false
     default: ""
   release_title:
@@ -50,7 +54,8 @@ runs:
       uses: actions/github-script@v7
       env:
         INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
-        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_HOURS: ${{ inputs.hours }}
+        INPUT_SINCE_PR: ${{ inputs.since_pr }}
         INPUT_RELEASE_TITLE: ${{ inputs.release_title }}
         INPUT_VERSION_NAME: ${{ inputs.version_name }}
         INPUT_VERSION_CODE: ${{ inputs.version_code }}
@@ -59,19 +64,14 @@ runs:
         script: |
           const { owner, repo } = context.repo;
           const baseBranch = process.env.INPUT_BASE_BRANCH;
-          const sinceInput = process.env.INPUT_SINCE;
+          const hours = parseInt(process.env.INPUT_HOURS, 10) || 24;
+          const sincePrInput = process.env.INPUT_SINCE_PR;
+          const sincePr = sincePrInput ? parseInt(sincePrInput, 10) : null;
 
-          let since;
-          if (sinceInput) {
-            since = new Date(sinceInput);
-            if (isNaN(since.getTime())) {
-              core.setFailed(`Invalid 'since' timestamp: ${sinceInput}. Use ISO 8601 format (e.g. 2025-01-20T12:00:00Z)`);
-              return;
-            }
-            core.info(`Checking for PRs merged since: ${since.toISOString()} (from input)`);
+          if (sincePr) {
+            core.info(`Collecting PRs with number >= ${sincePr}`);
           } else {
-            since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-            core.info(`Checking for PRs merged since: ${since.toISOString()} (last 24 hours)`);
+            core.info(`Collecting PRs merged in the last ${hours} hours`);
           }
 
           core.info(`Filtering PRs merged into branch: ${baseBranch}`);
@@ -88,9 +88,15 @@ runs:
 
           core.info(`Total closed PRs fetched for branch '${baseBranch}': ${prs.length}`);
 
-          const merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
-
-          core.info(`Merged PRs since ${since.toISOString()}: ${merged.length}`);
+          let merged;
+          if (sincePr) {
+            merged = prs.filter(pr => pr.merged_at && pr.number >= sincePr);
+            core.info(`Merged PRs with number >= ${sincePr}: ${merged.length}`);
+          } else {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+            merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
+            core.info(`Merged PRs in last ${hours}h: ${merged.length}`);
+          }
 
           if (merged.length > 0) {
             core.info("Merged PRs:");
@@ -103,7 +109,11 @@ runs:
           core.setOutput("pr_numbers", merged.map(pr => pr.number).join(","));
 
           if (merged.length === 0) {
-            core.warning(`No pull requests merged into '${baseBranch}' since ${since.toISOString()}.`);
+            if (sincePr) {
+              core.warning(`No pull requests merged into '${baseBranch}' with number >= ${sincePr}.`);
+            } else {
+              core.warning(`No pull requests merged into '${baseBranch}' in the last ${hours} hours.`);
+            }
             core.setOutput("should_build", "false");
             core.setOutput("release_notes", "");
             return;

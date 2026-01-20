@@ -19,7 +19,8 @@ A composite GitHub Action that collects merged pull requests within a specified 
 |-------|----------|---------|-------------|
 | `github_token` | Yes | - | GitHub token for API access |
 | `base_branch` | Yes | - | Target branch to filter PRs (only PRs merged into this branch will be collected) |
-| `since` | No | last 24 hours | Collect PRs merged after this timestamp (ISO 8601 format, e.g. `2025-01-20T12:00:00Z`) |
+| `hours` | No | `24` | Time window in hours to look back for merged PRs (ignored if `since_pr` is set) |
+| `since_pr` | No | - | PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring `hours` parameter |
 | `release_title` | No | - | Title template for release notes. Supports placeholders: `{date}`, `{version_name}`, `{version_code}` |
 | `version_name` | No | - | Version name to include in release notes |
 | `version_code` | No | - | Version code to include in release notes |
@@ -57,17 +58,31 @@ jobs:
         run: echo "Building with ${{ steps.collect.outputs.pr_count }} merged PRs"
 ```
 
-### Custom time window (since specific date)
+### Custom time window
 
 ```yaml
-- name: Collect merged PRs since specific date
+- name: Collect merged PRs (last 48 hours)
   id: collect
   uses: novasamatech/github-actions/collect-prs@v1
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    base_branch: 'develop'
-    since: '2025-01-15T00:00:00Z'
+    base_branch: 'main'
+    hours: '48'
 ```
+
+### Collect PRs starting from specific PR number
+
+```yaml
+- name: Collect merged PRs since PR #100
+  id: collect
+  uses: novasamatech/github-actions/collect-prs@v1
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    base_branch: 'main'
+    since_pr: '100'
+```
+
+This will collect all merged PRs with number >= 100.
 
 ### With release title template
 

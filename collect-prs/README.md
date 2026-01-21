@@ -21,9 +21,6 @@ A composite GitHub Action that collects merged pull requests within a specified 
 | `base_branch` | No* | - | Target branch to filter PRs (only PRs merged into this branch will be collected). *Required unless `since_pr` is set |
 | `hours` | No | `24` | Time window in hours to look back for merged PRs (ignored if `since_pr` is set) |
 | `since_pr` | No | - | PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring `hours` and `base_branch` parameters. Base branch is auto-detected from this PR |
-| `release_title` | No | - | Title template for release notes. Supports placeholders: `{date}`, `{version_name}`, `{version_code}` |
-| `version_name` | No | - | Version name to include in release notes |
-| `version_code` | No | - | Version code to include in release notes |
 
 ## Outputs
 
@@ -83,25 +80,11 @@ jobs:
 
 This will collect all merged PRs with number >= 100. The base branch is automatically detected from PR #100, so you don't need to specify `base_branch`.
 
-### With release title template
+### Output format
 
-```yaml
-- name: Collect merged PRs
-  id: collect
-  uses: novasamatech/github-actions/collect-prs@v1
-  with:
-    github_token: ${{ secrets.GITHUB_TOKEN }}
-    base_branch: 'main'
-    release_title: 'Nightly {date} (version {version_name} code {version_code})'
-    version_name: '1.2.3'
-    version_code: '456'
-```
-
-This will generate release notes like:
+The `release_notes` output will be formatted like:
 
 ```
-Nightly 2025-01-20 (version 1.2.3 code 456)
-
 Merged pull requests:
 - #123: Add new feature https://github.com/novasamatech/repo-name/pull/123
 - #124: Fix bug in login https://github.com/novasamatech/repo-name/pull/124

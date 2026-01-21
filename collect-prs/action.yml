@@ -20,19 +20,6 @@ inputs:
     description: "PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring hours and base_branch parameters. Base branch is auto-detected from this PR"
     required: false
     default: ""
-  release_title:
-    description: "Title template for release notes. Supports placeholders: {date}, {version_name}, {version_code}"
-    required: false
-    default: ""
-  version_name:
-    description: "Version name to include in release notes"
-    required: false
-    default: ""
-  version_code:
-    description: "Version code to include in release notes"
-    required: false
-    default: ""
-
 outputs:
   should_build:
     description: "Whether there are merged PRs to build (true/false)"
@@ -57,9 +44,6 @@ runs:
         INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
         INPUT_HOURS: ${{ inputs.hours }}
         INPUT_SINCE_PR: ${{ inputs.since_pr }}
-        INPUT_RELEASE_TITLE: ${{ inputs.release_title }}
-        INPUT_VERSION_NAME: ${{ inputs.version_name }}
-        INPUT_VERSION_CODE: ${{ inputs.version_code }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
@@ -134,23 +118,7 @@ runs:
             return;
           }
 
-          const lines = [];
-
-          const releaseTitle = process.env.INPUT_RELEASE_TITLE;
-          const versionName = process.env.INPUT_VERSION_NAME;
-          const versionCode = process.env.INPUT_VERSION_CODE;
-
-          if (releaseTitle) {
-            const date = new Date().toISOString().split('T')[0];
-            const title = releaseTitle
-              .replace('{date}', date)
-              .replace('{version_name}', versionName || '')
-              .replace('{version_code}', versionCode || '');
-            lines.push(title);
-            lines.push("");
-          }
-
-          lines.push(`Merged pull requests:`);
+          const lines = [`Merged pull requests:`];
           for (const pr of merged) {
             lines.push(`- #${pr.number}: ${pr.title} ${pr.html_url}`);
           }

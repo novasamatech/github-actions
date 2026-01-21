@@ -9,14 +9,15 @@ inputs:
     description: "GitHub token for API access"
     required: true
   base_branch:
-    description: "Target branch to filter PRs (only PRs merged into this branch will be collected)"
-    required: true
+    description: "Target branch to filter PRs (only PRs merged into this branch will be collected). Ignored if since_pr is set - base branch will be auto-detected from the specified PR"
+    required: false
+    default: ""
   hours:
     description: "Time window in hours to look back for merged PRs (ignored if since_pr is set)"
     required: false
     default: "24"
   since_pr:
-    description: "PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring hours parameter"
+    description: "PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring hours and base_branch parameters. Base branch is auto-detected from this PR"
     required: false
     default: ""
   release_title:
@@ -63,14 +64,28 @@ runs:
         github-token: ${{ inputs.github_token }}
         script: |
           const { owner, repo } = context.repo;
-          const baseBranch = process.env.INPUT_BASE_BRANCH;
+          let baseBranch = process.env.INPUT_BASE_BRANCH;
           const hours = parseInt(process.env.INPUT_HOURS, 10) || 24;
           const sincePrInput = process.env.INPUT_SINCE_PR;
           const sincePr = sincePrInput ? parseInt(sincePrInput, 10) : null;
 
           if (sincePr) {
             core.info(`Collecting PRs with number >= ${sincePr}`);
+            core.info(`Fetching PR #${sincePr} to determine base branch...`);
+
+            const { data: referencePr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: sincePr,
+            });
+
+            baseBranch = referencePr.base.ref;
+            core.info(`Auto-detected base branch from PR #${sincePr}: ${baseBranch}`);
           } else {
+            if (!baseBranch) {
+              core.setFailed("base_branch is required when since_pr is not set");
+              return;
+            }
             core.info(`Collecting PRs merged in the last ${hours} hours`);
           }
 

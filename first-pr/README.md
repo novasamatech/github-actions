@@ -9,7 +9,7 @@ A composite GitHub Action that finds the first merged PR number in the commit ra
   id: first-pr
   uses: novasamatech/github-actions/first-pr@v1
   with:
-    github_token: ${{ secrets.GITHUB_TOKEN }}
+    github_token: ${{ github.token }}
     src_ref: 'feature-branch'
     dst_ref: 'main'
 ```
@@ -53,7 +53,7 @@ jobs:
         id: first-pr
         uses: novasamatech/github-actions/first-pr@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           src_ref: 'feature-branch'
           dst_ref: 'main'
 
@@ -78,7 +78,7 @@ jobs:
         id: first-pr
         uses: novasamatech/github-actions/first-pr@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           src_ref: ${{ github.sha }}
           dst_ref: 'main'
 
@@ -87,7 +87,7 @@ jobs:
         id: collect
         uses: novasamatech/github-actions/collect-prs@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           base_branch: 'main'
           since_pr: ${{ steps.first-pr.outputs.pr_number }}
 ```

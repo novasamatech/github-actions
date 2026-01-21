@@ -18,9 +18,9 @@ A composite GitHub Action that collects merged pull requests within a specified 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `github_token` | Yes | - | GitHub token for API access |
-| `base_branch` | Yes | - | Target branch to filter PRs (only PRs merged into this branch will be collected) |
+| `base_branch` | No* | - | Target branch to filter PRs (only PRs merged into this branch will be collected). *Required unless `since_pr` is set |
 | `hours` | No | `24` | Time window in hours to look back for merged PRs (ignored if `since_pr` is set) |
-| `since_pr` | No | - | PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring `hours` parameter |
+| `since_pr` | No | - | PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring `hours` and `base_branch` parameters. Base branch is auto-detected from this PR |
 | `release_title` | No | - | Title template for release notes. Supports placeholders: `{date}`, `{version_name}`, `{version_code}` |
 | `version_name` | No | - | Version name to include in release notes |
 | `version_code` | No | - | Version code to include in release notes |
@@ -78,11 +78,10 @@ jobs:
   uses: novasamatech/github-actions/collect-prs@v1
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    base_branch: 'main'
     since_pr: '100'
 ```
 
-This will collect all merged PRs with number >= 100.
+This will collect all merged PRs with number >= 100. The base branch is automatically detected from PR #100, so you don't need to specify `base_branch`.
 
 ### With release title template
 
@@ -108,42 +107,3 @@ Merged pull requests:
 - #124: Fix bug in login https://github.com/novasamatech/repo-name/pull/124
 ```
 
-### Nightly build workflow
-
-```yaml
-name: Nightly Build
-
-on:
-  schedule:
-    - cron: '0 2 * * *'
-
-jobs:
-  check:
-    runs-on: ubuntu-latest
-    outputs:
-      should_build: ${{ steps.meta.outputs.should_build }}
-      release_notes: ${{ steps.meta.outputs.release_notes }}
-    steps:
-      - name: Collect merged PRs
-        id: meta
-        uses: novasamatech/github-actions/collect-prs@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          base_branch: 'main'
-          release_title: 'Nightly {date}'
-
-  build:
-    needs: check
-    if: needs.check.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Build
-        run: echo "Building nightly..."
-
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          body: ${{ needs.check.outputs.release_notes }}
-          tag_name: nightly-${{ github.run_id }}
-          prerelease: true
-```

@@ -1,0 +1,133 @@
+# Copyright © 2025 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: "Collect Merged PRs"
+description: "Collects merged pull requests within a specified time window and generates release notes"
+
+inputs:
+  github_token:
+    description: "GitHub token for API access"
+    required: true
+  base_branch:
+    description: "Target branch to filter PRs (only PRs merged into this branch will be collected). Ignored if since_pr is set - base branch will be auto-detected from the specified PR"
+    required: false
+    default: ""
+  hours:
+    description: "Time window in hours to look back for merged PRs (ignored if since_pr is set)"
+    required: false
+    default: "24"
+  since_pr:
+    description: "PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring hours and base_branch parameters. Base branch is auto-detected from this PR"
+    required: false
+    default: ""
+outputs:
+  should_build:
+    description: "Whether there are merged PRs to build (true/false)"
+    value: ${{ steps.collect.outputs.should_build }}
+  release_notes:
+    description: "Generated release notes from merged PRs"
+    value: ${{ steps.collect.outputs.release_notes }}
+  pr_count:
+    description: "Number of merged PRs found"
+    value: ${{ steps.collect.outputs.pr_count }}
+  pr_numbers:
+    description: "Comma-separated list of merged PR numbers"
+    value: ${{ steps.collect.outputs.pr_numbers }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Collect merged PRs
+      id: collect
+      uses: actions/github-script@v7
+      env:
+        INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
+        INPUT_HOURS: ${{ inputs.hours }}
+        INPUT_SINCE_PR: ${{ inputs.since_pr }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const { owner, repo } = context.repo;
+          let baseBranch = process.env.INPUT_BASE_BRANCH;
+          const hours = parseInt(process.env.INPUT_HOURS, 10) || 24;
+          const sincePrInput = process.env.INPUT_SINCE_PR;
+          const sincePr = sincePrInput ? parseInt(sincePrInput, 10) : null;
+
+          if (sincePr) {
+            core.info(`Collecting PRs with number >= ${sincePr}`);
+            core.info(`Fetching PR #${sincePr} to determine base branch...`);
+
+            const { data: referencePr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: sincePr,
+            });
+
+            baseBranch = referencePr.base.ref;
+            core.info(`Auto-detected base branch from PR #${sincePr}: ${baseBranch}`);
+          } else {
+            if (!baseBranch) {
+              core.setFailed("base_branch is required when since_pr is not set");
+              return;
+            }
+            core.info(`Collecting PRs merged in the last ${hours} hours`);
+          }
+
+          core.info(`Filtering PRs merged into branch: ${baseBranch}`);
+
+          const prs = await github.paginate(github.rest.pulls.list, {
+            owner,
+            repo,
+            state: "closed",
+            base: baseBranch,
+            sort: "updated",
+            direction: "desc",
+            per_page: 100,
+          });
+
+          core.info(`Total closed PRs fetched for branch '${baseBranch}': ${prs.length}`);
+
+          let merged;
+          if (sincePr) {
+            merged = prs.filter(pr => pr.merged_at && pr.number >= sincePr);
+            core.info(`Merged PRs with number >= ${sincePr}: ${merged.length}`);
+          } else {
+            const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+            merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
+            core.info(`Merged PRs in last ${hours}h: ${merged.length}`);
+          }
+
+          if (merged.length > 0) {
+            core.info("Merged PRs:");
+            merged.forEach(pr => {
+              core.info(`  - #${pr.number}: ${pr.title} (merged: ${pr.merged_at})`);
+            });
+          }
+
+          core.setOutput("pr_count", merged.length.toString());
+          core.setOutput("pr_numbers", merged.map(pr => pr.number).join(","));
+
+          if (merged.length === 0) {
+            if (sincePr) {
+              core.warning(`No pull requests merged into '${baseBranch}' with number >= ${sincePr}.`);
+            } else {
+              core.warning(`No pull requests merged into '${baseBranch}' in the last ${hours} hours.`);
+            }
+            core.setOutput("should_build", "false");
+            core.setOutput("release_notes", "");
+            return;
+          }
+
+          const lines = [`Merged pull requests:`];
+          for (const pr of merged) {
+            lines.push(`- #${pr.number}: ${pr.title} ${pr.html_url}`);
+          }
+
+          const notes = lines.join("\n");
+
+          core.notice(`Found ${merged.length} merged PR(s)`);
+          core.info("Release notes:");
+          core.info(notes);
+
+          core.setOutput("should_build", "true");
+          core.setOutput("release_notes", notes);

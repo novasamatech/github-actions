@@ -1,8 +1,10 @@
 # Collect Merged PRs
 
-A composite GitHub Action that collects merged pull requests within a specified time window and generates release notes.
+A composite GitHub Action that collects merged pull requests either from the commit diff between two git refs, or by time window on a single branch.
 
 ## Usage
+
+### Diff mode (between two refs)
 
 ```yaml
 - name: Collect merged PRs
@@ -10,7 +12,19 @@ A composite GitHub Action that collects merged pull requests within a specified 
   uses: novasamatech/github-actions/collect-prs@v1
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    base_branch: 'main'
+    src_ref: 'feature-branch'
+    dst_ref: 'main'
+```
+
+### Time mode (last N hours)
+
+```yaml
+- name: Collect merged PRs
+  id: collect-prs
+  uses: novasamatech/github-actions/collect-prs@v1
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    dst_ref: 'main'
 ```
 
 ## Inputs
@@ -18,9 +32,9 @@ A composite GitHub Action that collects merged pull requests within a specified 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `github_token` | Yes | - | GitHub token for API access |
-| `base_branch` | No* | - | Target branch to filter PRs (only PRs merged into this branch will be collected). *Required unless `since_pr` is set |
-| `hours` | No | `24` | Time window in hours to look back for merged PRs (ignored if `since_pr` is set) |
-| `since_pr` | No | - | PR number to start from (inclusive). If set, collects all PRs with number >= this value, ignoring `hours` and `base_branch` parameters. Base branch is auto-detected from this PR |
+| `src_ref` | No | - | Source ref (branch name or commit SHA). If set, enables diff mode — collects PRs from commits between `dst_ref` and `src_ref` |
+| `dst_ref` | Yes | - | Destination ref (branch name). In diff mode used as comparison base. In time mode used as the branch to search merged PRs |
+| `hours` | No | `24` | Time window in hours to look back for merged PRs (only used when `src_ref` is not set) |
 
 ## Outputs
 
@@ -33,7 +47,7 @@ A composite GitHub Action that collects merged pull requests within a specified 
 
 ## Examples
 
-### Basic usage (last 24 hours)
+### Diff mode — collect PRs between two refs
 
 ```yaml
 jobs:
@@ -43,19 +57,36 @@ jobs:
       should_build: ${{ steps.collect.outputs.should_build }}
       release_notes: ${{ steps.collect.outputs.release_notes }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Collect merged PRs
         id: collect
         uses: novasamatech/github-actions/collect-prs@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          base_branch: 'main'
+          src_ref: 'release/1.0'
+          dst_ref: 'main'
 
       - name: Build if PRs were merged
         if: steps.collect.outputs.should_build == 'true'
         run: echo "Building with ${{ steps.collect.outputs.pr_count }} merged PRs"
 ```
 
-### Custom time window
+### Time mode — last 24 hours (default)
+
+```yaml
+- name: Collect merged PRs
+  id: collect
+  uses: novasamatech/github-actions/collect-prs@v1
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    dst_ref: 'main'
+```
+
+### Time mode — custom time window
 
 ```yaml
 - name: Collect merged PRs (last 48 hours)
@@ -63,22 +94,9 @@ jobs:
   uses: novasamatech/github-actions/collect-prs@v1
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    base_branch: 'main'
+    dst_ref: 'main'
     hours: '48'
 ```
-
-### Collect PRs starting from specific PR number
-
-```yaml
-- name: Collect merged PRs since PR #100
-  id: collect
-  uses: novasamatech/github-actions/collect-prs@v1
-  with:
-    github_token: ${{ secrets.GITHUB_TOKEN }}
-    since_pr: '100'
-```
-
-This will collect all merged PRs with number >= 100. The base branch is automatically detected from PR #100, so you don't need to specify `base_branch`.
 
 ### Output format
 
@@ -89,4 +107,3 @@ Merged pull requests:
 - #123: Add new feature https://github.com/novasamatech/repo-name/pull/123
 - #124: Fix bug in login https://github.com/novasamatech/repo-name/pull/124
 ```
-

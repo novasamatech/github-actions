@@ -19,6 +19,14 @@ inputs:
     description: "Time window in hours to look back for merged PRs (only used when src_ref is not set)"
     required: false
     default: "24"
+  release_notes_format:
+    description: "Release notes format: plain (default, main-compatible), plain-ext-v1, or CSV"
+    required: false
+    default: "plain"
+  timezone:
+    description: "IANA timezone used to format merge date for plain-ext-v1/csv (default: Europe/Berlin for CET/CEST)"
+    required: false
+    default: "Europe/Berlin"
 
 outputs:
   should_build:
@@ -44,120 +52,20 @@ runs:
         INPUT_SRC_REF: ${{ inputs.src_ref }}
         INPUT_DST_REF: ${{ inputs.dst_ref }}
         INPUT_HOURS: ${{ inputs.hours }}
+        INPUT_RELEASE_NOTES_FORMAT: ${{ inputs.release_notes_format }}
+        INPUT_TIMEZONE: ${{ inputs.timezone }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
-          const { execSync } = require('child_process');
-          const { owner, repo } = context.repo;
-          const srcRef = process.env.INPUT_SRC_REF;
-          const dstRef = process.env.INPUT_DST_REF;
-          const hours = parseInt(process.env.INPUT_HOURS, 10) || 24;
+          const path = require("path");
+          const { execSync } = require("child_process");
+          const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
+          const { runAction } = require(path.join(actionPath, "src", "run.js"));
 
-          const setEmpty = () => {
-            core.setOutput("should_build", "false");
-            core.setOutput("release_notes", "");
-            core.setOutput("pr_count", "0");
-            core.setOutput("pr_numbers", "");
-          };
-
-          const outputResults = (merged) => {
-            core.setOutput("pr_count", merged.length.toString());
-            core.setOutput("pr_numbers", merged.map(pr => pr.number).join(","));
-
-            if (merged.length === 0) {
-              core.warning("No merged pull requests found.");
-              core.setOutput("should_build", "false");
-              core.setOutput("release_notes", "");
-              return;
-            }
-
-            const lines = ["Merged pull requests:"];
-            for (const pr of merged) {
-              lines.push(`- #${pr.number}: ${pr.title} ${pr.html_url}`);
-            }
-            const notes = lines.join("\n");
-
-            core.notice(`Found ${merged.length} merged PR(s)`);
-            core.info("Release notes:");
-            core.info(notes);
-
-            core.setOutput("should_build", "true");
-            core.setOutput("release_notes", notes);
-          };
-
-          if (srcRef) {
-            // --- Diff mode: collect PRs from commits between dst_ref and src_ref ---
-            core.info(`Diff mode: collecting PRs from commits between origin/${dstRef} and ${srcRef}`);
-
-            let sourceCommit;
-            try {
-              sourceCommit = execSync(`git rev-parse refs/remotes/origin/${srcRef}`).toString().trim();
-              core.info(`Source ref origin/${srcRef} resolved to: ${sourceCommit}`);
-            } catch {
-              sourceCommit = execSync(`git rev-parse ${srcRef}`).toString().trim();
-              core.info(`Source ref ${srcRef} resolved to commit: ${sourceCommit}`);
-            }
-
-            const commitsOutput = execSync(`git rev-list origin/${dstRef}..${sourceCommit} --reverse`).toString().trim();
-
-            if (!commitsOutput) {
-              core.info(`No commits found between origin/${dstRef} and source ref`);
-              setEmpty();
-              return;
-            }
-
-            const commits = commitsOutput.split('\n');
-            core.info(`Found ${commits.length} commits to check`);
-
-            const seenPrNumbers = new Set();
-            const merged = [];
-
-            for (const commitSha of commits) {
-              core.info(`Checking commit: ${commitSha}`);
-
-              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner,
-                repo,
-                commit_sha: commitSha,
-              });
-
-              for (const pr of prs.filter(pr => pr.merged_at !== null)) {
-                if (!seenPrNumbers.has(pr.number)) {
-                  seenPrNumbers.add(pr.number);
-                  merged.push(pr);
-                  core.info(`  Found PR #${pr.number}: ${pr.title}`);
-                }
-              }
-            }
-
-            outputResults(merged);
-
-          } else {
-            // --- Time mode: collect PRs merged into dst_ref branch in last N hours ---
-            core.info(`Time mode: collecting PRs merged into '${dstRef}' in the last ${hours} hours`);
-
-            const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-
-            const prs = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: "closed",
-              base: dstRef,
-              sort: "updated",
-              direction: "desc",
-              per_page: 100,
-            });
-
-            core.info(`Total closed PRs fetched for branch '${dstRef}': ${prs.length}`);
-
-            const merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
-            core.info(`Merged PRs in last ${hours}h: ${merged.length}`);
-
-            if (merged.length > 0) {
-              merged.forEach(pr => {
-                core.info(`  - #${pr.number}: ${pr.title} (merged: ${pr.merged_at})`);
-              });
-            }
-
-            outputResults(merged);
-          }
+          await runAction({
+            github,
+            context,
+            core,
+            execSync,
+            env: process.env,
+          });

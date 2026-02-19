@@ -1,0 +1,96 @@
+# Copyright © 2026 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: Check Version Bump
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+jobs:
+  check-version-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate .version is increased
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f ".version" ]]; then
+            echo "::error::.version file is missing in PR branch"
+            exit 1
+          fi
+
+          # Ensure base branch ref exists locally.
+          git fetch --no-tags --prune --depth=1 origin "${BASE_REF}"
+
+          BASE_VERSION_RAW="$(git show "origin/${BASE_REF}:.version" 2>/dev/null || true)"
+          HEAD_VERSION_RAW="$(cat .version)"
+
+          BASE_VERSION="$(echo "${BASE_VERSION_RAW}" | tr -d '[:space:]')"
+          HEAD_VERSION="$(echo "${HEAD_VERSION_RAW}" | tr -d '[:space:]')"
+
+          if [[ -z "${BASE_VERSION}" ]]; then
+            echo "::error::Failed to read .version from base branch '${BASE_REF}'"
+            exit 1
+          fi
+
+          if [[ -z "${HEAD_VERSION}" ]]; then
+            echo "::error::.version in PR branch is empty"
+            exit 1
+          fi
+
+          VERSION_RE='^v?[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ "${BASE_VERSION}" =~ ${VERSION_RE} ]]; then
+            echo "::error::Base .version has invalid format: '${BASE_VERSION}'"
+            echo "Expected format: vMAJOR.MINOR.PATCH (for example, v3.2.0)"
+            exit 1
+          fi
+
+          if ! [[ "${HEAD_VERSION}" =~ ${VERSION_RE} ]]; then
+            echo "::error::PR .version has invalid format: '${HEAD_VERSION}'"
+            echo "Expected format: vMAJOR.MINOR.PATCH (for example, v3.2.0)"
+            exit 1
+          fi
+
+          parse_version() {
+            local version="${1#v}"
+            local major minor patch
+            IFS='.' read -r major minor patch <<< "${version}"
+            echo "${major} ${minor} ${patch}"
+          }
+
+          read -r base_major base_minor base_patch <<< "$(parse_version "${BASE_VERSION}")"
+          read -r head_major head_minor head_patch <<< "$(parse_version "${HEAD_VERSION}")"
+
+          is_greater="false"
+          if (( head_major > base_major )); then
+            is_greater="true"
+          elif (( head_major == base_major && head_minor > base_minor )); then
+            is_greater="true"
+          elif (( head_major == base_major && head_minor == base_minor && head_patch > base_patch )); then
+            is_greater="true"
+          fi
+
+          echo "Base version: ${BASE_VERSION}"
+          echo "PR version: ${HEAD_VERSION}"
+
+          if [[ "${is_greater}" != "true" ]]; then
+            echo "::error::Version must be increased in PR. Base='${BASE_VERSION}', PR='${HEAD_VERSION}'"
+            exit 1
+          fi
+
+          echo "Version bump check passed: ${BASE_VERSION} -> ${HEAD_VERSION}"

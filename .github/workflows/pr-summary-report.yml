@@ -1,0 +1,140 @@
+name: PR Summary Report
+
+on:
+  workflow_call:
+    inputs:
+      days:
+        description: Number of days to look back for merged PRs
+        required: false
+        default: 30
+        type: number
+
+jobs:
+  collect-prs-summary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      MAIN_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+
+    steps:
+      - name: Resolve reporting window
+        id: window
+        shell: bash
+        env:
+          MANUAL_DAYS: ${{ inputs.days || github.event.inputs.days || '30' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            # Reusable workflow is expected to run on schedule at the 1st day of month.
+            if [[ "$(date -u +%d)" != "01" ]]; then
+              echo "::error::Schedule mode requires run date to be the 1st day of month (UTC)."
+              exit 1
+            fi
+
+            # Days in the previous calendar month
+            DAYS="$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%d)"
+
+            # Add hours elapsed since the start of current UTC day.
+            NOW_EPOCH="$(date -u +%s)"
+            START_OF_DAY_EPOCH="$(date -u -d "$(date -u +%Y-%m-%d) 00:00:00" +%s)"
+            ELAPSED_HOURS_TODAY=$(( (NOW_EPOCH - START_OF_DAY_EPOCH) / 3600 ))
+
+            HOURS=$(( 10#${DAYS} * 24 + ELAPSED_HOURS_TODAY ))
+            MODE="schedule"
+          else
+            DAYS="${MANUAL_DAYS}"
+            HOURS=$((10#${DAYS} * 24))
+            MODE="manual"
+          fi
+
+          if ! [[ "${DAYS}" =~ ^[0-9]+$ ]] || [[ "${DAYS}" -lt 1 ]]; then
+            echo "::error::Input 'days' must be a positive integer"
+            exit 1
+          fi
+
+          WINDOW_START="$(date -u -d "${HOURS} hours ago" +"%Y-%m-%dT%H:%M:%SZ")"
+
+          echo "mode=${MODE}" >> "${GITHUB_OUTPUT}"
+          echo "days=${DAYS}" >> "${GITHUB_OUTPUT}"
+          echo "hours=${HOURS}" >> "${GITHUB_OUTPUT}"
+          echo "window_start=${WINDOW_START}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect merged PRs
+        id: collect-prs
+        uses: novasamatech/github-actions/collect-prs@v3
+        with:
+          github_token: ${{ github.token }}
+          dst_ref: ${{ env.MAIN_BRANCH }}
+          hours: ${{ steps.window.outputs.hours }}
+          release_notes_format: plain-ext-v1
+
+      - name: Collect merged PRs in CSV
+        id: collect-prs-csv
+        uses: novasamatech/github-actions/collect-prs@v3
+        with:
+          github_token: ${{ github.token }}
+          dst_ref: ${{ env.MAIN_BRANCH }}
+          hours: ${{ steps.window.outputs.hours }}
+          release_notes_format: CSV
+
+      - name: Save CSV report
+        shell: bash
+        env:
+          CSV_CONTENT: ${{ steps.collect-prs-csv.outputs.release_notes }}
+        run: |
+          printf '%s' "${CSV_CONTENT}" > report.csv
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report.csv
+
+      - name: Print PR summary
+        shell: bash
+        env:
+          MODE: ${{ steps.window.outputs.mode }}
+          DAYS: ${{ steps.window.outputs.days }}
+          HOURS: ${{ steps.window.outputs.hours }}
+          WINDOW_START: ${{ steps.window.outputs.window_start }}
+          MAIN_BRANCH: ${{ env.MAIN_BRANCH }}
+          SHOULD_BUILD: ${{ steps.collect-prs.outputs.should_build }}
+          PR_COUNT: ${{ steps.collect-prs.outputs.pr_count }}
+          PR_NUMBERS: ${{ steps.collect-prs.outputs.pr_numbers }}
+          RELEASE_NOTES: ${{ steps.collect-prs.outputs.release_notes }}
+        run: |
+          set -euo pipefail
+
+          echo "Mode: ${MODE}"
+          echo "Base branch: ${MAIN_BRANCH}"
+          echo "Window: last ${DAYS} days (${HOURS} hours), since ${WINDOW_START}"
+          echo "Merged PR count: ${PR_COUNT}"
+          echo "Merged PR numbers: ${PR_NUMBERS:-none}"
+
+          if [[ "${SHOULD_BUILD}" == "true" && -n "${RELEASE_NOTES}" ]]; then
+            echo ""
+            echo "${RELEASE_NOTES}"
+          else
+            echo "No merged PRs found in the selected window."
+          fi
+
+          {
+            echo "## PR Summary"
+            echo ""
+            echo "- Mode: \`${MODE}\`"
+            echo "- Base branch: \`${MAIN_BRANCH}\`"
+            echo "- Window: last \`${DAYS}\` days (\`${HOURS}\` hours), since \`${WINDOW_START}\`"
+            echo "- Merged PR count: \`${PR_COUNT}\`"
+            echo "- Merged PR numbers: \`${PR_NUMBERS:-none}\`"
+            echo ""
+            if [[ "${SHOULD_BUILD}" == "true" && -n "${RELEASE_NOTES}" ]]; then
+              echo "### Details"
+              echo ""
+              echo "${RELEASE_NOTES}"
+            else
+              echo "No merged PRs found in the selected window."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

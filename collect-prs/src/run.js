@@ -1,9 +1,16 @@
 "use strict";
 
 const DEFAULT_HOURS = 24;
-const DEFAULT_FORMAT = "plain";
+const FORMAT_PLAIN = "plain";
+const FORMAT_PLAIN_EXT_V1 = "plain-ext-v1";
+const FORMAT_CSV = "csv";
+const DEFAULT_FORMAT = FORMAT_PLAIN;
 const DEFAULT_TIMEZONE = "Europe/Berlin";
-const SUPPORTED_FORMATS = new Set(["plain", "csv"]);
+const SUPPORTED_FORMATS = new Set([
+  FORMAT_PLAIN,
+  FORMAT_PLAIN_EXT_V1,
+  FORMAT_CSV,
+]);
 
 function parseHours(input) {
   const parsed = Number.parseInt(input, 10);
@@ -14,13 +21,17 @@ function parseHours(input) {
 }
 
 function resolveReleaseNotesFormat(input, core) {
-  const normalized = String(input || DEFAULT_FORMAT).trim().toLowerCase();
+  const normalized = String(input || DEFAULT_FORMAT)
+    .trim()
+    .toLowerCase();
   if (SUPPORTED_FORMATS.has(normalized)) {
     return normalized;
   }
 
   if (core?.warning) {
-    core.warning(`Unknown release_notes_format '${input}', falling back to '${DEFAULT_FORMAT}'`);
+    core.warning(
+      `Unknown release_notes_format '${input}', falling back to '${DEFAULT_FORMAT}'`,
+    );
   }
   return DEFAULT_FORMAT;
 }
@@ -28,11 +39,15 @@ function resolveReleaseNotesFormat(input, core) {
 function resolveTimezone(input, core) {
   const timezoneInput = input || DEFAULT_TIMEZONE;
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezoneInput }).format(new Date());
+    new Intl.DateTimeFormat("en-US", { timeZone: timezoneInput }).format(
+      new Date(),
+    );
     return timezoneInput;
   } catch {
     if (core?.warning) {
-      core.warning(`Invalid timezone '${timezoneInput}', falling back to '${DEFAULT_TIMEZONE}'`);
+      core.warning(
+        `Invalid timezone '${timezoneInput}', falling back to '${DEFAULT_TIMEZONE}'`,
+      );
     }
     return DEFAULT_TIMEZONE;
   }
@@ -41,7 +56,7 @@ function resolveTimezone(input, core) {
 function csvEscape(value) {
   const stringValue = String(value ?? "");
   if (/[",\n\r]/.test(stringValue)) {
-    return `"${stringValue.replace(/"/g, "\"\"")}"`;
+    return `"${stringValue.replace(/"/g, '""')}"`;
   }
   return stringValue;
 }
@@ -61,14 +76,25 @@ function formatMergeDate(mergedAt, timezone) {
 
   const byType = Object.fromEntries(
     parts
-      .filter(part => part.type !== "literal")
-      .map(part => [part.type, part.value]),
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
   );
 
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
 
-function buildPlainReleaseNotes(rows) {
+function buildPlainReleaseNotes(merged) {
+  const lines = ["Merged pull requests:"];
+  for (const pr of merged) {
+    const number = pr.number ?? "";
+    const title = pr.title || "";
+    const link = pr.html_url || "";
+    lines.push(`- #${number}: ${title} ${link}`.trimEnd());
+  }
+  return lines.join("\n");
+}
+
+function buildPlainExtV1ReleaseNotes(rows) {
   const lines = ["Merged pull requests:"];
   for (const row of rows) {
     lines.push(`${row.title} ; ${row.link} ; ${row.author} ; ${row.mergeDate}`);
@@ -82,12 +108,9 @@ function buildCsvReleaseNotes(rows) {
   ];
 
   for (const row of rows) {
-    lines.push([
-      row.title,
-      row.link,
-      row.author,
-      row.mergeDate,
-    ].map(csvEscape).join(","));
+    lines.push(
+      [row.title, row.link, row.author, row.mergeDate].map(csvEscape).join(","),
+    );
   }
 
   return lines.join("\n");
@@ -113,13 +136,25 @@ async function collectRows(merged, getAuthorDisplay, timezone) {
   return rows;
 }
 
-async function runAction({ github, context, core, execSync, env = process.env }) {
+async function runAction({
+  github,
+  context,
+  core,
+  execSync,
+  env = process.env,
+}) {
   const { owner, repo } = context.repo;
   const srcRef = String(env.INPUT_SRC_REF || "").trim();
   const dstRef = String(env.INPUT_DST_REF || "").trim();
   const hours = parseHours(env.INPUT_HOURS);
-  const releaseNotesFormat = resolveReleaseNotesFormat(env.INPUT_RELEASE_NOTES_FORMAT, core);
-  const timezone = resolveTimezone(env.INPUT_TIMEZONE, core);
+  const releaseNotesFormat = resolveReleaseNotesFormat(
+    env.INPUT_RELEASE_NOTES_FORMAT,
+    core,
+  );
+  const timezone =
+    releaseNotesFormat === FORMAT_PLAIN
+      ? DEFAULT_TIMEZONE
+      : resolveTimezone(env.INPUT_TIMEZONE, core);
 
   const authorNameCache = new Map();
 
@@ -128,7 +163,9 @@ async function runAction({ github, context, core, execSync, env = process.env })
 
     if (!authorNameCache.has(handle)) {
       try {
-        const { data: user } = await github.rest.users.getByUsername({ username: handle });
+        const { data: user } = await github.rest.users.getByUsername({
+          username: handle,
+        });
         authorNameCache.set(handle, user.name || "");
       } catch {
         authorNameCache.set(handle, "");
@@ -141,7 +178,7 @@ async function runAction({ github, context, core, execSync, env = process.env })
 
   const outputResults = async (merged) => {
     core.setOutput("pr_count", merged.length.toString());
-    core.setOutput("pr_numbers", merged.map(pr => pr.number).join(","));
+    core.setOutput("pr_numbers", merged.map((pr) => pr.number).join(","));
 
     if (merged.length === 0) {
       core.warning("No merged pull requests found.");
@@ -150,10 +187,16 @@ async function runAction({ github, context, core, execSync, env = process.env })
       return;
     }
 
-    const rows = await collectRows(merged, getAuthorDisplay, timezone);
-    const notes = releaseNotesFormat === "csv"
-      ? buildCsvReleaseNotes(rows)
-      : buildPlainReleaseNotes(rows);
+    let notes;
+    if (releaseNotesFormat === FORMAT_PLAIN) {
+      notes = buildPlainReleaseNotes(merged);
+    } else {
+      const rows = await collectRows(merged, getAuthorDisplay, timezone);
+      notes =
+        releaseNotesFormat === FORMAT_CSV
+          ? buildCsvReleaseNotes(rows)
+          : buildPlainExtV1ReleaseNotes(rows);
+    }
 
     core.notice(`Found ${merged.length} merged PR(s)`);
     core.info("Release notes:");
@@ -164,18 +207,26 @@ async function runAction({ github, context, core, execSync, env = process.env })
   };
 
   if (srcRef) {
-    core.info(`Diff mode: collecting PRs from commits between origin/${dstRef} and ${srcRef}`);
+    core.info(
+      `Diff mode: collecting PRs from commits between origin/${dstRef} and ${srcRef}`,
+    );
 
     let sourceCommit;
     try {
-      sourceCommit = execSync(`git rev-parse refs/remotes/origin/${srcRef}`).toString().trim();
+      sourceCommit = execSync(`git rev-parse refs/remotes/origin/${srcRef}`)
+        .toString()
+        .trim();
       core.info(`Source ref origin/${srcRef} resolved to: ${sourceCommit}`);
     } catch {
       sourceCommit = execSync(`git rev-parse ${srcRef}`).toString().trim();
       core.info(`Source ref ${srcRef} resolved to commit: ${sourceCommit}`);
     }
 
-    const commitsOutput = execSync(`git rev-list origin/${dstRef}..${sourceCommit} --reverse`).toString().trim();
+    const commitsOutput = execSync(
+      `git rev-list origin/${dstRef}..${sourceCommit} --reverse`,
+    )
+      .toString()
+      .trim();
 
     if (!commitsOutput) {
       core.info(`No commits found between origin/${dstRef} and source ref`);
@@ -192,13 +243,14 @@ async function runAction({ github, context, core, execSync, env = process.env })
     for (const commitSha of commits) {
       core.info(`Checking commit: ${commitSha}`);
 
-      const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-        owner,
-        repo,
-        commit_sha: commitSha,
-      });
+      const { data: prs } =
+        await github.rest.repos.listPullRequestsAssociatedWithCommit({
+          owner,
+          repo,
+          commit_sha: commitSha,
+        });
 
-      for (const pr of prs.filter(pr => pr.merged_at !== null)) {
+      for (const pr of prs.filter((pr) => pr.merged_at !== null)) {
         if (!seenPrNumbers.has(pr.number)) {
           seenPrNumbers.add(pr.number);
           merged.push(pr);
@@ -211,7 +263,9 @@ async function runAction({ github, context, core, execSync, env = process.env })
     return;
   }
 
-  core.info(`Time mode: collecting PRs merged into '${dstRef}' in the last ${hours} hours`);
+  core.info(
+    `Time mode: collecting PRs merged into '${dstRef}' in the last ${hours} hours`,
+  );
 
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
@@ -227,11 +281,13 @@ async function runAction({ github, context, core, execSync, env = process.env })
 
   core.info(`Total closed PRs fetched for branch '${dstRef}': ${prs.length}`);
 
-  const merged = prs.filter(pr => pr.merged_at && new Date(pr.merged_at) >= since);
+  const merged = prs.filter(
+    (pr) => pr.merged_at && new Date(pr.merged_at) >= since,
+  );
   core.info(`Merged PRs in last ${hours}h: ${merged.length}`);
 
   if (merged.length > 0) {
-    merged.forEach(pr => {
+    merged.forEach((pr) => {
       core.info(`  - #${pr.number}: ${pr.title} (merged: ${pr.merged_at})`);
     });
   }
@@ -245,6 +301,7 @@ module.exports = {
   DEFAULT_TIMEZONE,
   buildCsvReleaseNotes,
   buildPlainReleaseNotes,
+  buildPlainExtV1ReleaseNotes,
   csvEscape,
   formatMergeDate,
   parseHours,

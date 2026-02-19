@@ -35,8 +35,8 @@ A composite GitHub Action that collects merged pull requests either from the com
 | `src_ref` | No | - | Source ref (branch name or commit SHA). If set, enables diff mode — collects PRs from commits between `dst_ref` and `src_ref` |
 | `dst_ref` | Yes | - | Destination ref (branch name). In diff mode used as comparison base. In time mode used as the branch to search merged PRs |
 | `hours` | No | `24` | Time window in hours to look back for merged PRs (only used when `src_ref` is not set) |
-| `release_notes_format` | No | `plain` | Output format for `release_notes`: `plain` or `csv` (case-insensitive) |
-| `timezone` | No | `Europe/Berlin` | IANA timezone used to format merge date (`YYYY-MM-DD`) |
+| `release_notes_format` | No | `plain` | Output format for `release_notes`: `plain` (main-compatible), `plain-ext-v1`, or `csv` (case-insensitive) |
+| `timezone` | No | `Europe/Berlin` | IANA timezone used to format merge date (`YYYY-MM-DD`) for `plain-ext-v1` and `csv` |
 
 ## Outputs
 
@@ -102,7 +102,21 @@ jobs:
 
 ### Output format
 
-#### `plain` (default)
+#### `plain` (default, main-compatible)
+
+```
+Merged pull requests:
+- #123: Add new feature https://github.com/novasamatech/repo-name/pull/123
+- #124: Fix bug in login https://github.com/novasamatech/repo-name/pull/124
+```
+
+Row format:
+
+```
+- #PR_NUMBER: PR Title PR Link
+```
+
+#### `plain-ext-v1`
 
 ```
 Merged pull requests:
@@ -128,6 +142,19 @@ If the user profile has no name, empty parentheses are preserved:
 handle()
 ```
 
+### `plain-ext-v1` example usage
+
+```yaml
+- name: Collect merged PRs (plain-ext-v1, CET/CEST)
+  id: collect
+  uses: novasamatech/github-actions/collect-prs@v1
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    dst_ref: 'main'
+    release_notes_format: 'plain-ext-v1'
+    timezone: 'Europe/Berlin'
+```
+
 #### `csv`
 
 The first row is the header and values are CSV-escaped:
@@ -148,4 +175,15 @@ Add new feature,https://github.com/novasamatech/repo-name/pull/123,octocat(The O
     dst_ref: 'main'
     release_notes_format: 'CSV'
     timezone: 'Europe/Berlin'
+```
+
+## Development
+
+### Run tests
+
+Tests use Node's built-in test runner (`node:test`) and can be run locally:
+
+```bash
+cd collect-prs
+node --test src/run.test.js
 ```

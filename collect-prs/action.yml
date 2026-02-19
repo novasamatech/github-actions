@@ -20,11 +20,11 @@ inputs:
     required: false
     default: "24"
   release_notes_format:
-    description: "Release notes format: plain (default) or CSV"
+    description: "Release notes format: plain (default, main-compatible), plain-ext-v1, or CSV"
     required: false
     default: "plain"
   timezone:
-    description: "IANA timezone used to format merge date (default: Europe/Berlin for CET/CEST)"
+    description: "IANA timezone used to format merge date for plain-ext-v1/csv (default: Europe/Berlin for CET/CEST)"
     required: false
     default: "Europe/Berlin"
 

@@ -8,6 +8,7 @@ const {
   DEFAULT_TIMEZONE,
   buildCsvReleaseNotes,
   buildPlainReleaseNotes,
+  buildPlainExtV1ReleaseNotes,
   csvEscape,
   formatMergeDate,
   parseHours,
@@ -133,6 +134,7 @@ test("resolveReleaseNotesFormat is case-insensitive and falls back to plain", ()
   const core = createCoreMock();
   assert.equal(resolveReleaseNotesFormat("CSV", core), "csv");
   assert.equal(resolveReleaseNotesFormat("plain", core), "plain");
+  assert.equal(resolveReleaseNotesFormat("PLAIN-EXT-V1", core), "plain-ext-v1");
   assert.equal(resolveReleaseNotesFormat("xml", core), "plain");
   assert.match(core.warnings[0], /Unknown release_notes_format/);
 });
@@ -161,6 +163,14 @@ test("csvEscape quotes commas, quotes, and newlines", () => {
 });
 
 test("release note builders output expected shape", () => {
+  const merged = [
+    {
+      number: 1,
+      title: "Fix parser",
+      html_url: "https://example.com/pr/1",
+    },
+  ];
+
   const rows = [
     {
       title: "Fix parser",
@@ -171,7 +181,12 @@ test("release note builders output expected shape", () => {
   ];
 
   assert.equal(
-    buildPlainReleaseNotes(rows),
+    buildPlainReleaseNotes(merged),
+    "Merged pull requests:\n- #1: Fix parser https://example.com/pr/1",
+  );
+
+  assert.equal(
+    buildPlainExtV1ReleaseNotes(rows),
     "Merged pull requests:\nFix parser ; https://example.com/pr/1 ; alice(Alice) ; 2026-01-01",
   );
 
@@ -253,7 +268,7 @@ test("runAction in time mode keeps only merged PRs in range and builds plain out
     per_page: 100,
   });
 
-  assert.deepEqual(userCalls, ["alice", "bob"]);
+  assert.deepEqual(userCalls, []);
   assert.equal(core.outputs.should_build, "true");
   assert.equal(core.outputs.pr_count, "2");
   assert.equal(core.outputs.pr_numbers, "11,14");
@@ -261,8 +276,66 @@ test("runAction in time mode keeps only merged PRs in range and builds plain out
     core.outputs.release_notes,
     [
       "Merged pull requests:",
-      "Fix login ; https://github.com/nova/github-actions/pull/11 ; alice(Alice Doe) ; 2026-02-18",
-      "Fast path ; https://github.com/nova/github-actions/pull/14 ; bob() ; 2026-02-18",
+      "- #11: Fix login https://github.com/nova/github-actions/pull/11",
+      "- #14: Fast path https://github.com/nova/github-actions/pull/14",
+    ].join("\n"),
+  );
+});
+
+test("runAction supports plain-ext-v1 output with author and merge date", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-02-18T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const { github, userCalls } = createGithubMock({
+    paginateResult: [
+      {
+        number: 111,
+        title: "Fix login",
+        html_url: "https://github.com/nova/github-actions/pull/111",
+        merged_at: "2026-02-18T10:00:00Z",
+        user: { login: "alice" },
+      },
+      {
+        number: 114,
+        title: "Fast path",
+        html_url: "https://github.com/nova/github-actions/pull/114",
+        merged_at: "2026-02-18T11:00:00Z",
+        user: { login: "bob" },
+      },
+    ],
+    userNamesByHandle: {
+      alice: "Alice Doe",
+      bob: "",
+    },
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
+      INPUT_TIMEZONE: "Europe/Berlin",
+    },
+  });
+
+  assert.deepEqual(userCalls, ["alice", "bob"]);
+  assert.equal(
+    core.outputs.release_notes,
+    [
+      "Merged pull requests:",
+      "Fix login ; https://github.com/nova/github-actions/pull/111 ; alice(Alice Doe) ; 2026-02-18",
+      "Fast path ; https://github.com/nova/github-actions/pull/114 ; bob() ; 2026-02-18",
     ].join("\n"),
   );
 });
@@ -317,7 +390,7 @@ test("runAction in time mode supports CSV format and RFC4180 escaping", async (t
   assert.equal(core.outputs.should_build, "true");
 });
 
-test("runAction uses default timezone on invalid timezone input", async (t) => {
+test("runAction uses default timezone on invalid timezone input for plain-ext-v1", async (t) => {
   const realNow = Date.now;
   Date.now = () => Date.parse("2026-06-02T00:00:00Z");
   t.after(() => {
@@ -351,7 +424,7 @@ test("runAction uses default timezone on invalid timezone input", async (t) => {
       INPUT_SRC_REF: "",
       INPUT_DST_REF: "main",
       INPUT_HOURS: "24",
-      INPUT_RELEASE_NOTES_FORMAT: "plain",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
       INPUT_TIMEZONE: "Bad/Zone",
     },
   });
@@ -412,7 +485,7 @@ test("runAction falls back to default hours when input is invalid", async (t) =>
 
 test("runAction deduplicates merged PRs in diff mode and excludes non-merged", async () => {
   const core = createCoreMock();
-  const { github, commitCalls } = createGithubMock({
+  const { github, commitCalls, userCalls } = createGithubMock({
     prsByCommit: {
       c1: [
         {
@@ -474,6 +547,7 @@ test("runAction deduplicates merged PRs in diff mode and excludes non-merged", a
   });
 
   assert.deepEqual(commitCalls, ["c1", "c2", "c3"]);
+  assert.deepEqual(userCalls, []);
   assert.equal(core.outputs.pr_count, "2");
   assert.equal(core.outputs.pr_numbers, "51,53");
   assert.equal(core.outputs.should_build, "true");
@@ -481,8 +555,8 @@ test("runAction deduplicates merged PRs in diff mode and excludes non-merged", a
     core.outputs.release_notes,
     [
       "Merged pull requests:",
-      "Add CI ; https://github.com/nova/github-actions/pull/51 ; alice(Alice) ; 2026-02-01",
-      "Refactor cache ; https://github.com/nova/github-actions/pull/53 ; carol(Carol) ; 2026-02-01",
+      "- #51: Add CI https://github.com/nova/github-actions/pull/51",
+      "- #53: Refactor cache https://github.com/nova/github-actions/pull/53",
     ].join("\n"),
   );
 });
@@ -647,6 +721,10 @@ test("runAction falls back to plain output when release_notes_format is unknown"
 
   assert.match(core.warnings[0], /Unknown release_notes_format/);
   assert.match(core.outputs.release_notes, /^Merged pull requests:/);
+  assert.match(
+    core.outputs.release_notes,
+    /- #71: One https:\/\/github.com\/nova\/github-actions\/pull\/71/,
+  );
 });
 
 test("runAction caches author lookup and keeps handle when profile lookup fails", async (t) => {
@@ -698,7 +776,7 @@ test("runAction caches author lookup and keeps handle when profile lookup fails"
       INPUT_SRC_REF: "",
       INPUT_DST_REF: "main",
       INPUT_HOURS: "24",
-      INPUT_RELEASE_NOTES_FORMAT: "plain",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
       INPUT_TIMEZONE: "UTC",
     },
   });

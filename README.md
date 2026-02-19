@@ -51,7 +51,7 @@ jobs:
   pr-summary:
     uses: novasamatech/github-actions/.github/workflows/pr-summary-report.yml@v3
     with:
-      days: ${{ github.event.inputs.days || 30 }}
+      days: ${{ fromJSON(github.event.inputs.days || '30') }}
     secrets: inherit
 ```
 

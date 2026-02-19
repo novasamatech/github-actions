@@ -23,7 +23,7 @@ jobs:
         id: window
         shell: bash
         env:
-          MANUAL_DAYS: ${{ inputs.days || github.event.inputs.days || '30' }}
+          MANUAL_DAYS: ${{ inputs.days }}
         run: |
           set -euo pipefail
 

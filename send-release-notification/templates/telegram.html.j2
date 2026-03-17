@@ -1,0 +1,17 @@
+{#
+  Telegram HTML template.
+
+  Supported tags: <b>, <i>, <u>, <s>, <a href="">, <code>, <pre>, <tg-spoiler>
+  NOT supported: <br>, <p>, <h1>-<h6>, <ul>, <li>, <table>, etc.
+  Line breaks are literal newlines in the message body.
+#}
+<b>Changelog {{ platform }} - {{ date }}</b>
+
+<b>List of merged PRs:</b>
+{% for pr in prs -%}
+- {{ pr.linked }}
+{% endfor %}
+<b>Download:</b>
+{% for link in downloads -%}
+{{ link.linked }}
+{% endfor -%}

@@ -20,7 +20,7 @@ inputs:
     required: false
     default: "24"
   release_notes_format:
-    description: "Release notes format: plain (default, main-compatible), plain-ext-v1, or CSV"
+    description: "Release notes format: plain (default, main-compatible), plain-ext-v1, csv, or markdown"
     required: false
     default: "plain"
   timezone:

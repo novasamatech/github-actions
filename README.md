@@ -61,6 +61,7 @@ jobs:
 |---|---|---|
 | Collect Merged PRs | [`collect-prs`](./collect-prs) | Collects merged PRs either from commit diff (`src_ref`/`dst_ref`) or by time window on a branch, with multiple release notes formats. |
 | Upload to S3 | [`s3-upload`](./s3-upload) | Uploads file or directory to S3-compatible storage (via `s3cmd`) and returns uploaded path. |
+| Send Release Notification | [`send-release-notification`](./send-release-notification) | Sends release changelog notifications to Telegram and Matrix via an external notification bot service. |
 | Trigger Allure TestOps Job | [`trigger-allure-testops`](./trigger-allure-testops) | Authenticates in Allure TestOps and starts a job run with branch and launch parameters. |
 
 ## License

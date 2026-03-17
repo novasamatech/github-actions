@@ -1,0 +1,76 @@
+# Copyright © 2026 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: Send Release Notification Tests
+
+on:
+  pull_request:
+    paths:
+      - "send-release-notification/**"
+      - ".github/workflows/send-release-notification-tests.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "send-release-notification/**"
+      - ".github/workflows/send-release-notification-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Unit tests (send-release-notification)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r send-release-notification/requirements.txt
+
+      - name: Run tests
+        id: tests
+        working-directory: send-release-notification
+        run: |
+          set +e
+          output=$(pytest test_send.py -v --tb=short 2>&1)
+          exit_code=$?
+          echo "$output"
+          {
+            echo "output<<PYTEST_EOF"
+            echo "$output" | tail -c 3000
+            echo "PYTEST_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $exit_code
+
+      - name: Post test results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const output = `${{ steps.tests.outputs.output }}`;
+            const passed = `${{ steps.tests.outcome }}` === 'success';
+            const status = passed ? '✅ Passed' : '❌ Failed';
+            const body = [
+              `### send-release-notification test results: ${status}`,
+              '',
+              '<details>',
+              '<summary>Test output</summary>',
+              '',
+              '```',
+              output,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

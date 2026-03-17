@@ -1,0 +1,10 @@
+Changelog {{ platform }} - {{ date }}
+
+List of merged PRs:
+{% for pr in prs -%}
+- {{ pr.raw }}
+{% endfor %}
+Download:
+{% for link in downloads -%}
+{{ link.raw }}
+{% endfor -%}

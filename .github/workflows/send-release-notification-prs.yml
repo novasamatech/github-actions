@@ -1,19 +1,19 @@
 # Copyright © 2026 Novasama Technologies GmbH
 # SPDX-License-Identifier: Apache-2.0
 
-name: Send Release Notification Tests
+name: send-release-notification PR checks
 
 on:
   pull_request:
     paths:
       - "send-release-notification/**"
-      - ".github/workflows/send-release-notification-tests.yml"
+      - ".github/workflows/send-release-notification-prs.yml"
   push:
     branches:
       - main
     paths:
       - "send-release-notification/**"
-      - ".github/workflows/send-release-notification-tests.yml"
+      - ".github/workflows/send-release-notification-prs.yml"
   workflow_dispatch:
 
 permissions:

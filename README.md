@@ -64,6 +64,21 @@ jobs:
 | Send Release Notification | [`send-release-notification`](./send-release-notification) | Sends release changelog notifications to Telegram and Matrix via an external notification bot service. |
 | Trigger Allure TestOps Job | [`trigger-allure-testops`](./trigger-allure-testops) | Authenticates in Allure TestOps and starts a job run with branch and launch parameters. |
 
+## Repository Structure
+
+```
+.github/workflows/
+  <action-name>-prs.yml      # PR checks workflow per action (tests + post results to PR)
+  check-version-bump.yml      # Validates .version bump on every PR
+  update-tag.yml              # Creates/updates version tags on push to main
+  pr-summary-report.yml       # Reusable workflow (workflow_call) for PR reports
+```
+
+Naming conventions:
+- Each composite action lives in its own top-level directory (e.g., `collect-prs/`, `send-release-notification/`)
+- PR checks workflow for an action must be named `<action-directory-name>-prs.yml`
+- The `name:` field inside the workflow must follow the pattern `<action-directory-name> PR checks`
+
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).

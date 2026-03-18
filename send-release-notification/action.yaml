@@ -1,0 +1,53 @@
+name: Send Release Notification
+description: >
+  Send build changelog notification to Telegram and Matrix via an external
+  notification bot service. Uses Jinja2 templates with provider-specific HTML.
+
+inputs:
+  platform:
+    description: 'Platform name (e.g., Android, iOS)'
+    required: true
+  pr_list:
+    description: 'Multiline list of merged PRs in markdown format (e.g., "- [#123](url): Title")'
+    required: true
+  download_links:
+    description: 'Multiline platform-specific download links (plain text, URLs will be auto-linked)'
+    required: true
+  bot_url:
+    description: 'Notification bot base URL (e.g., https://bot.example.org)'
+    required: true
+  bot_api_token:
+    description: 'API token for the notification bot service'
+    required: true
+  telegram_chat_ids:
+    description: 'Comma-separated Telegram chat IDs (optional, skipped if empty)'
+    required: false
+    default: ''
+  telegram_thread_id:
+    description: 'Telegram forum topic thread ID (optional, applied to all Telegram chats)'
+    required: false
+    default: ''
+  matrix_room_ids:
+    description: 'Comma-separated Matrix room IDs (optional, skipped if empty)'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure Jinja2 is available
+      shell: bash
+      run: python3 -c "import jinja2" 2>/dev/null || pip install --quiet Jinja2
+
+    - name: Render and send notifications
+      shell: bash
+      env:
+        INPUT_PLATFORM: ${{ inputs.platform }}
+        INPUT_PR_LIST: ${{ inputs.pr_list }}
+        INPUT_DOWNLOAD_LINKS: ${{ inputs.download_links }}
+        INPUT_BOT_URL: ${{ inputs.bot_url }}
+        INPUT_BOT_API_TOKEN: ${{ inputs.bot_api_token }}
+        INPUT_TELEGRAM_CHAT_IDS: ${{ inputs.telegram_chat_ids }}
+        INPUT_TELEGRAM_THREAD_ID: ${{ inputs.telegram_thread_id }}
+        INPUT_MATRIX_ROOM_IDS: ${{ inputs.matrix_room_ids }}
+      run: python3 "${{ github.action_path }}/send.py"

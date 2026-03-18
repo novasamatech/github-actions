@@ -1,0 +1,81 @@
+# Copyright © 2026 Novasama Technologies GmbH
+# SPDX-License-Identifier: Apache-2.0
+
+name: collect-prs PR checks
+
+on:
+  pull_request:
+    paths:
+      - "collect-prs/**"
+      - ".github/workflows/collect-prs-prs.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "collect-prs/**"
+      - ".github/workflows/collect-prs-prs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  unit-tests:
+    name: Unit tests (${{ matrix.action_dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        action_dir:
+          - collect-prs
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Run action unit tests
+        id: tests
+        run: |
+          set +e
+          output=$(node --test "${{ matrix.action_dir }}/src/run.test.js" 2>&1)
+          exit_code=$?
+          echo "$output"
+          {
+            echo "output<<NODE_TEST_EOF"
+            echo "$output" | tail -c 3000
+            echo "NODE_TEST_EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $exit_code
+
+      - name: Post test results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const output = `${{ steps.tests.outputs.output }}`;
+            const passed = `${{ steps.tests.outcome }}` === 'success';
+            const status = passed ? '✅ Passed' : '❌ Failed';
+            const body = [
+              `### ${{ matrix.action_dir }} test results: ${status}`,
+              '',
+              '<details>',
+              '<summary>Test output</summary>',
+              '',
+              '```',
+              output,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

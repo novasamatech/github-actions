@@ -4,12 +4,14 @@ const DEFAULT_HOURS = 24;
 const FORMAT_PLAIN = "plain";
 const FORMAT_PLAIN_EXT_V1 = "plain-ext-v1";
 const FORMAT_CSV = "csv";
+const FORMAT_MARKDOWN = "markdown";
 const DEFAULT_FORMAT = FORMAT_PLAIN;
 const DEFAULT_TIMEZONE = "Europe/Berlin";
 const SUPPORTED_FORMATS = new Set([
   FORMAT_PLAIN,
   FORMAT_PLAIN_EXT_V1,
   FORMAT_CSV,
+  FORMAT_MARKDOWN,
 ]);
 
 function parseHours(input) {
@@ -84,7 +86,7 @@ function formatMergeDate(mergedAt, timezone) {
 }
 
 function buildPlainReleaseNotes(merged) {
-  const lines = ["Merged pull requests:"];
+  const lines = [];
   for (const pr of merged) {
     const number = pr.number ?? "";
     const title = pr.title || "";
@@ -94,8 +96,19 @@ function buildPlainReleaseNotes(merged) {
   return lines.join("\n");
 }
 
+function buildMarkdownReleaseNotes(merged) {
+  const lines = [];
+  for (const pr of merged) {
+    const number = pr.number ?? "";
+    const title = pr.title || "";
+    const link = pr.html_url || "";
+    lines.push(`- [#${number}](${link}): ${title}`.trimEnd());
+  }
+  return lines.join("\n");
+}
+
 function buildPlainExtV1ReleaseNotes(rows) {
-  const lines = ["Merged pull requests:"];
+  const lines = [];
   for (const row of rows) {
     lines.push(`${row.title} ; ${row.link} ; ${row.author} ; ${row.mergeDate}`);
   }
@@ -190,6 +203,8 @@ async function runAction({
     let notes;
     if (releaseNotesFormat === FORMAT_PLAIN) {
       notes = buildPlainReleaseNotes(merged);
+    } else if (releaseNotesFormat === FORMAT_MARKDOWN) {
+      notes = buildMarkdownReleaseNotes(merged);
     } else {
       const rows = await collectRows(merged, getAuthorDisplay, timezone);
       notes =
@@ -300,6 +315,7 @@ module.exports = {
   DEFAULT_FORMAT,
   DEFAULT_TIMEZONE,
   buildCsvReleaseNotes,
+  buildMarkdownReleaseNotes,
   buildPlainReleaseNotes,
   buildPlainExtV1ReleaseNotes,
   csvEscape,

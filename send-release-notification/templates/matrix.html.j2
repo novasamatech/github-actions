@@ -1,0 +1,20 @@
+{#
+  Matrix HTML template.
+
+  Supports rich HTML subset: <h1>-<h6>, <b>, <i>, <u>, <s>, <p>, <br>,
+  <ul>, <ol>, <li>, <a href="">, <code>, <pre>, <blockquote>,
+  <table>, <tr>, <td>, <th>, <hr>, <span>, <div>, etc.
+#}
+<h3>Changelog {{ platform }} - {{ date }}</h3>
+<p><b>List of merged PRs:</b></p>
+<ul>
+{% for pr in prs -%}
+<li>{{ pr.linked }}</li>
+{% endfor -%}
+</ul>
+<p><b>Download:</b></p>
+<ul>
+{% for link in downloads -%}
+<li>{{ link.linked }}</li>
+{% endfor -%}
+</ul>

@@ -105,7 +105,6 @@ jobs:
 #### `plain` (default, main-compatible)
 
 ```
-Merged pull requests:
 - #123: Add new feature https://github.com/novasamatech/repo-name/pull/123
 - #124: Fix bug in login https://github.com/novasamatech/repo-name/pull/124
 ```
@@ -119,7 +118,6 @@ Row format:
 #### `plain-ext-v1`
 
 ```
-Merged pull requests:
 Add new feature ; https://github.com/novasamatech/repo-name/pull/123 ; octocat(The Octocat) ; 2026-02-18
 Fix bug in login ; https://github.com/novasamatech/repo-name/pull/124 ; dev-user() ; 2026-02-18
 ```

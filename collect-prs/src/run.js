@@ -86,7 +86,7 @@ function formatMergeDate(mergedAt, timezone) {
 }
 
 function buildPlainReleaseNotes(merged) {
-  const lines = ["Merged pull requests:"];
+  const lines = [];
   for (const pr of merged) {
     const number = pr.number ?? "";
     const title = pr.title || "";
@@ -97,7 +97,7 @@ function buildPlainReleaseNotes(merged) {
 }
 
 function buildMarkdownReleaseNotes(merged) {
-  const lines = ["Merged pull requests:"];
+  const lines = [];
   for (const pr of merged) {
     const number = pr.number ?? "";
     const title = pr.title || "";
@@ -108,7 +108,7 @@ function buildMarkdownReleaseNotes(merged) {
 }
 
 function buildPlainExtV1ReleaseNotes(rows) {
-  const lines = ["Merged pull requests:"];
+  const lines = [];
   for (const row of rows) {
     lines.push(`${row.title} ; ${row.link} ; ${row.author} ; ${row.mergeDate}`);
   }

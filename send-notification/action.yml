@@ -1,0 +1,41 @@
+name: Send Notification
+description: >
+  Send an arbitrary message to Telegram and/or Matrix via an external
+  notification bot service.
+
+inputs:
+  message:
+    description: 'Plain text message'
+    required: true
+  html_message:
+    description: 'HTML-formatted message (optional, falls back to plain text for Matrix)'
+    required: false
+    default: ''
+  bot_url:
+    description: 'Notification bot base URL (e.g., https://bot.example.org)'
+    required: true
+  bot_api_token:
+    description: 'API token for the notification bot service'
+    required: true
+  telegram_chat_ids:
+    description: 'Comma-separated Telegram destinations: chat_id or chat_id:thread_id (optional, skipped if empty)'
+    required: false
+    default: ''
+  matrix_room_ids:
+    description: 'Comma-separated Matrix room IDs (optional, skipped if empty)'
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Send notifications
+      shell: bash
+      env:
+        INPUT_MESSAGE: ${{ inputs.message }}
+        INPUT_HTML_MESSAGE: ${{ inputs.html_message }}
+        INPUT_BOT_URL: ${{ inputs.bot_url }}
+        INPUT_BOT_API_TOKEN: ${{ inputs.bot_api_token }}
+        INPUT_TELEGRAM_CHAT_IDS: ${{ inputs.telegram_chat_ids }}
+        INPUT_MATRIX_ROOM_IDS: ${{ inputs.matrix_room_ids }}
+      run: python3 "${{ github.action_path }}/send.py"

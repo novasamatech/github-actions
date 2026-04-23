@@ -31,6 +31,18 @@ inputs:
     description: 'Comma-separated Matrix room IDs (optional, skipped if empty)'
     required: false
     default: ''
+  retry_count:
+    description: 'Number of retries after the initial attempt when the bot API call fails with a transport error, HTTP 429 or 5xx'
+    required: false
+    default: '6'
+  retry_delay:
+    description: 'Fallback delay in seconds between retry attempts when Retry-After is not provided'
+    required: false
+    default: '20'
+  request_timeout:
+    description: 'Per-attempt HTTP socket timeout in seconds'
+    required: false
+    default: '60'
 
 runs:
   using: "composite"
@@ -50,4 +62,7 @@ runs:
         INPUT_TELEGRAM_CHAT_IDS: ${{ inputs.telegram_chat_ids }}
         INPUT_TELEGRAM_THREAD_ID: ${{ inputs.telegram_thread_id }}
         INPUT_MATRIX_ROOM_IDS: ${{ inputs.matrix_room_ids }}
+        INPUT_RETRY_COUNT: ${{ inputs.retry_count }}
+        INPUT_RETRY_DELAY: ${{ inputs.retry_delay }}
+        INPUT_REQUEST_TIMEOUT: ${{ inputs.request_timeout }}
       run: python3 "${{ github.action_path }}/send.py"

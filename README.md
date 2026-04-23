@@ -65,6 +65,35 @@ jobs:
 | Send Release Notification | [`send-release-notification`](./send-release-notification) | Sends release changelog notifications to Telegram and Matrix via an external notification bot service. |
 | Trigger Allure TestOps Job | [`trigger-allure-testops`](./trigger-allure-testops) | Authenticates in Allure TestOps and starts a job run with branch and launch parameters. |
 
+## Python development setup
+
+All Python-based actions (`send-notification`, `send-release-notification`) share a single pinned dependency set declared at the repository root in [`requirements.txt`](./requirements.txt). It contains everything needed to run the tests of every Python action.
+
+Create a virtual environment and install the shared dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run tests for a specific action:
+
+```bash
+cd send-notification              # or send-release-notification
+pytest test_*.py -v
+```
+
+To upgrade dependencies, install the latest versions into the venv and refresh the lock file:
+
+```bash
+source .venv/bin/activate
+pip install --upgrade pytest Jinja2
+pip freeze > requirements.txt
+```
+
+CI (`*-prs.yml` workflows) installs dependencies with `pip install -r requirements.txt`, so the same versions run locally and in CI.
+
 ## Repository Structure
 
 ```

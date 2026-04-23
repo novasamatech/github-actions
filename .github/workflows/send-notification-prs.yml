@@ -7,12 +7,14 @@ on:
   pull_request:
     paths:
       - "send-notification/**"
+      - "requirements.txt"
       - ".github/workflows/send-notification-prs.yml"
   push:
     branches:
       - main
     paths:
       - "send-notification/**"
+      - "requirements.txt"
       - ".github/workflows/send-notification-prs.yml"
   workflow_dispatch:
 
@@ -34,14 +36,14 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install pytest
+        run: pip install -r requirements.txt
 
       - name: Run tests
         id: tests
         working-directory: send-notification
         run: |
           set +e
-          output=$(pytest test_send.py -v --tb=short 2>&1)
+          output=$(pytest test_*.py -v --tb=short 2>&1)
           exit_code=$?
           echo "$output"
           {

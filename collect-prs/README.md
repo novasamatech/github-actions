@@ -37,6 +37,8 @@ A composite GitHub Action that collects merged pull requests either from the com
 | `hours` | No | `24` | Time window in hours to look back for merged PRs (only used when `src_ref` is not set) |
 | `release_notes_format` | No | `plain` | Output format for `release_notes`: `plain` (main-compatible), `plain-ext-v1`, or `csv` (case-insensitive) |
 | `timezone` | No | `Europe/Berlin` | IANA timezone used to format merge date (`YYYY-MM-DD`) for `plain-ext-v1` and `csv` |
+| `retry_count` | No | `6` | Number of additional attempts for GitHub API calls that fail with transient errors (HTTP `429` or `5xx`). `0` disables retries |
+| `retry_delay` | No | `10` | Delay in seconds between retry attempts for GitHub API calls |
 
 ## Outputs
 
@@ -174,6 +176,17 @@ Add new feature,https://github.com/novasamatech/repo-name/pull/123,octocat(The O
     release_notes_format: 'CSV'
     timezone: 'Europe/Berlin'
 ```
+
+## Retry behavior
+
+The action retries GitHub API calls that fail with transient errors:
+
+- HTTP `429` (rate limited)
+- HTTP `5xx` (server errors)
+
+`4xx` responses other than `429` and errors without a numeric HTTP status are not retried and surface immediately. The same retry budget applies separately to every wrapped API call (PR list pagination, per-commit PR lookup in diff mode, and per-author profile lookup).
+
+When the author profile lookup (`users.getByUsername`) exhausts its retries, the action keeps the PR but renders the author as `handle()` rather than failing the workflow — matching the existing behavior on non-retriable lookup errors.
 
 ## Development
 

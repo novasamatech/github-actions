@@ -7,6 +7,8 @@ const FORMAT_CSV = "csv";
 const FORMAT_MARKDOWN = "markdown";
 const DEFAULT_FORMAT = FORMAT_PLAIN;
 const DEFAULT_TIMEZONE = "Europe/Berlin";
+const DEFAULT_RETRY_COUNT = 6;
+const DEFAULT_RETRY_DELAY = 10;
 const SUPPORTED_FORMATS = new Set([
   FORMAT_PLAIN,
   FORMAT_PLAIN_EXT_V1,
@@ -14,12 +16,91 @@ const SUPPORTED_FORMATS = new Set([
   FORMAT_MARKDOWN,
 ]);
 
+const defaultSleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 function parseHours(input) {
   const parsed = Number.parseInt(input, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
     return parsed;
   }
   return DEFAULT_HOURS;
+}
+
+function parseRetryCount(input, core, defaultValue = DEFAULT_RETRY_COUNT) {
+  if (input === undefined || input === null) {
+    return defaultValue;
+  }
+  const raw = String(input).trim();
+  if (raw === "") {
+    return defaultValue;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== raw) {
+    if (core?.warning) {
+      core.warning(
+        `Invalid retry_count '${input}', falling back to '${defaultValue}'`,
+      );
+    }
+    return defaultValue;
+  }
+  return parsed;
+}
+
+function parseRetryDelay(input, core, defaultValue = DEFAULT_RETRY_DELAY) {
+  if (input === undefined || input === null) {
+    return defaultValue;
+  }
+  const raw = String(input).trim();
+  if (raw === "") {
+    return defaultValue;
+  }
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    if (core?.warning) {
+      core.warning(
+        `Invalid retry_delay '${input}', falling back to '${defaultValue}'`,
+      );
+    }
+    return defaultValue;
+  }
+  return parsed;
+}
+
+function isRetriableError(error) {
+  const status = error?.status;
+  if (typeof status !== "number" || !Number.isFinite(status)) {
+    return false;
+  }
+  if (status === 429) {
+    return true;
+  }
+  return status >= 500 && status < 600;
+}
+
+async function withRetry(
+  fn,
+  { retryCount, retryDelay, sleep, core, label },
+) {
+  const maxAttempts = Math.max(retryCount, 0) + 1;
+  let attempt = 0;
+  while (true) {
+    attempt += 1;
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt >= maxAttempts || !isRetriableError(error)) {
+        throw error;
+      }
+      const status = error?.status ?? "unknown";
+      if (core?.warning) {
+        core.warning(
+          `GitHub API ${label} failed (HTTP ${status}), retrying in ${retryDelay}s (attempt ${attempt}/${retryCount})`,
+        );
+      }
+      await sleep(retryDelay * 1000);
+    }
+  }
 }
 
 function resolveReleaseNotesFormat(input, core) {
@@ -155,6 +236,7 @@ async function runAction({
   core,
   execSync,
   env = process.env,
+  sleep = defaultSleep,
 }) {
   const { owner, repo } = context.repo;
   const srcRef = String(env.INPUT_SRC_REF || "").trim();
@@ -168,6 +250,17 @@ async function runAction({
     releaseNotesFormat === FORMAT_PLAIN
       ? DEFAULT_TIMEZONE
       : resolveTimezone(env.INPUT_TIMEZONE, core);
+  const retryCount = parseRetryCount(env.INPUT_RETRY_COUNT, core);
+  const retryDelay = parseRetryDelay(env.INPUT_RETRY_DELAY, core);
+
+  const callWithRetry = (fn, label) =>
+    withRetry(fn, {
+      retryCount,
+      retryDelay,
+      sleep,
+      core,
+      label,
+    });
 
   const authorNameCache = new Map();
 
@@ -176,9 +269,10 @@ async function runAction({
 
     if (!authorNameCache.has(handle)) {
       try {
-        const { data: user } = await github.rest.users.getByUsername({
-          username: handle,
-        });
+        const { data: user } = await callWithRetry(
+          () => github.rest.users.getByUsername({ username: handle }),
+          `users.getByUsername(${handle})`,
+        );
         authorNameCache.set(handle, user.name || "");
       } catch {
         authorNameCache.set(handle, "");
@@ -258,12 +352,15 @@ async function runAction({
     for (const commitSha of commits) {
       core.info(`Checking commit: ${commitSha}`);
 
-      const { data: prs } =
-        await github.rest.repos.listPullRequestsAssociatedWithCommit({
-          owner,
-          repo,
-          commit_sha: commitSha,
-        });
+      const { data: prs } = await callWithRetry(
+        () =>
+          github.rest.repos.listPullRequestsAssociatedWithCommit({
+            owner,
+            repo,
+            commit_sha: commitSha,
+          }),
+        `repos.listPullRequestsAssociatedWithCommit(${commitSha})`,
+      );
 
       for (const pr of prs.filter((pr) => pr.merged_at !== null)) {
         if (!seenPrNumbers.has(pr.number)) {
@@ -284,15 +381,19 @@ async function runAction({
 
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-  const prs = await github.paginate(github.rest.pulls.list, {
-    owner,
-    repo,
-    state: "closed",
-    base: dstRef,
-    sort: "updated",
-    direction: "desc",
-    per_page: 100,
-  });
+  const prs = await callWithRetry(
+    () =>
+      github.paginate(github.rest.pulls.list, {
+        owner,
+        repo,
+        state: "closed",
+        base: dstRef,
+        sort: "updated",
+        direction: "desc",
+        per_page: 100,
+      }),
+    `pulls.list(base=${dstRef})`,
+  );
 
   core.info(`Total closed PRs fetched for branch '${dstRef}': ${prs.length}`);
 
@@ -314,14 +415,20 @@ module.exports = {
   DEFAULT_HOURS,
   DEFAULT_FORMAT,
   DEFAULT_TIMEZONE,
+  DEFAULT_RETRY_COUNT,
+  DEFAULT_RETRY_DELAY,
   buildCsvReleaseNotes,
   buildMarkdownReleaseNotes,
   buildPlainReleaseNotes,
   buildPlainExtV1ReleaseNotes,
   csvEscape,
   formatMergeDate,
+  isRetriableError,
   parseHours,
+  parseRetryCount,
+  parseRetryDelay,
   resolveReleaseNotesFormat,
   resolveTimezone,
   runAction,
+  withRetry,
 };

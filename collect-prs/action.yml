@@ -27,6 +27,14 @@ inputs:
     description: "IANA timezone used to format merge date for plain-ext-v1/csv (default: Europe/Berlin for CET/CEST)"
     required: false
     default: "Europe/Berlin"
+  retry_count:
+    description: "Number of additional attempts for GitHub API calls that fail with transient errors (HTTP 429 or 5xx). 0 disables retries."
+    required: false
+    default: "6"
+  retry_delay:
+    description: "Delay in seconds between retry attempts for GitHub API calls."
+    required: false
+    default: "10"
 
 outputs:
   should_build:
@@ -54,6 +62,8 @@ runs:
         INPUT_HOURS: ${{ inputs.hours }}
         INPUT_RELEASE_NOTES_FORMAT: ${{ inputs.release_notes_format }}
         INPUT_TIMEZONE: ${{ inputs.timezone }}
+        INPUT_RETRY_COUNT: ${{ inputs.retry_count }}
+        INPUT_RETRY_DELAY: ${{ inputs.retry_delay }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |

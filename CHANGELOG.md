@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v5.3.0] - 2026-05-26
+
+### Added
+- `collect-prs`: retry logic around GitHub API calls. Retries on HTTP `429` and `5xx` responses; `4xx` and errors without a numeric HTTP status are not retried. New inputs `retry_count` (default `6`) and `retry_delay` in seconds (default `10`). The retry budget is applied independently to each wrapped call: PR list pagination, per-commit PR lookup in diff mode, and per-author profile lookup (`users.getByUsername`). When the author profile lookup exhausts its retries the action keeps the PR and renders the author as `handle()` rather than failing the workflow.
+- Extensive unit tests covering the retry path: `isRetriableError` classification, the `withRetry` wrapper (success, `5xx`/`429` retries, `4xx` short-circuit, exhaustion, zero retries, sleep-delay propagation), `runAction` retry behavior for paginate, commit lookup, and user lookup, retry-input parsing (defaults, overrides, invalid values), and a check that the `DEFAULT_RETRY_COUNT` / `DEFAULT_RETRY_DELAY` constants match the action metadata defaults.
+
 ## [v5.2.0] - 2026-04-22
 
 ### Added

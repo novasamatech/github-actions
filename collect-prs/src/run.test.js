@@ -5,6 +5,8 @@ const test = require("node:test");
 
 const {
   DEFAULT_HOURS,
+  DEFAULT_RETRY_COUNT,
+  DEFAULT_RETRY_DELAY,
   DEFAULT_TIMEZONE,
   buildCsvReleaseNotes,
   buildMarkdownReleaseNotes,
@@ -12,11 +14,30 @@ const {
   buildPlainExtV1ReleaseNotes,
   csvEscape,
   formatMergeDate,
+  isRetriableError,
   parseHours,
+  parseRetryCount,
+  parseRetryDelay,
   resolveReleaseNotesFormat,
   resolveTimezone,
   runAction,
+  withRetry,
 } = require("./run");
+
+function createHttpError(status, message = "HTTP error") {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function createTrackingSleep() {
+  const calls = [];
+  const sleep = async (ms) => {
+    calls.push(ms);
+  };
+  sleep.calls = calls;
+  return sleep;
+}
 
 function createCoreMock() {
   const outputs = {};
@@ -49,10 +70,23 @@ function createGithubMock({
   prsByCommit = {},
   userNamesByHandle = {},
   failingUsers = new Set(),
+  paginateFailures = [],
+  commitFailures = {},
+  userHttpFailures = {},
 } = {}) {
   const userCalls = [];
   const commitCalls = [];
   const paginateCalls = [];
+
+  const paginateQueue = [...paginateFailures];
+  const commitQueues = {};
+  for (const [key, value] of Object.entries(commitFailures)) {
+    commitQueues[key] = [...value];
+  }
+  const userQueues = {};
+  for (const [key, value] of Object.entries(userHttpFailures)) {
+    userQueues[key] = [...value];
+  }
 
   const github = {
     rest: {
@@ -66,6 +100,10 @@ function createGithubMock({
       users: {
         async getByUsername({ username }) {
           userCalls.push(username);
+
+          if (userQueues[username] && userQueues[username].length > 0) {
+            throw userQueues[username].shift();
+          }
 
           if (failingUsers.has(username)) {
             throw new Error(`Lookup failed for ${username}`);
@@ -83,12 +121,21 @@ function createGithubMock({
       repos: {
         async listPullRequestsAssociatedWithCommit({ commit_sha }) {
           commitCalls.push(commit_sha);
+          if (
+            commitQueues[commit_sha] &&
+            commitQueues[commit_sha].length > 0
+          ) {
+            throw commitQueues[commit_sha].shift();
+          }
           return { data: prsByCommit[commit_sha] || [] };
         },
       },
     },
     async paginate(fn, params) {
       paginateCalls.push({ fn, params });
+      if (paginateQueue.length > 0) {
+        throw paginateQueue.shift();
+      }
       return paginateResult;
     },
   };
@@ -848,4 +895,702 @@ test("runAction caches author lookup and keeps handle when profile lookup fails"
   assert.deepEqual(userCalls, ["same-user", "failed-user"]);
   assert.match(core.outputs.release_notes, /same-user\(Same User\)/);
   assert.match(core.outputs.release_notes, /failed-user\(\)/);
+});
+
+test("DEFAULT_RETRY_COUNT and DEFAULT_RETRY_DELAY match action.yml defaults", () => {
+  const actionYml = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "action.yml"),
+    "utf8",
+  );
+
+  const retryCountMatch = actionYml.match(
+    /retry_count:[\s\S]*?default:\s*"(\d+)"/,
+  );
+  const retryDelayMatch = actionYml.match(
+    /retry_delay:[\s\S]*?default:\s*"(\d+(?:\.\d+)?)"/,
+  );
+
+  assert.ok(retryCountMatch, "retry_count default should be present");
+  assert.ok(retryDelayMatch, "retry_delay default should be present");
+  assert.equal(Number(retryCountMatch[1]), DEFAULT_RETRY_COUNT);
+  assert.equal(Number(retryDelayMatch[1]), DEFAULT_RETRY_DELAY);
+});
+
+test("parseRetryCount accepts valid non-negative integers", () => {
+  const core = createCoreMock();
+  assert.equal(parseRetryCount("0", core), 0);
+  assert.equal(parseRetryCount("3", core), 3);
+  assert.equal(parseRetryCount("  12 ", core), 12);
+  assert.equal(core.warnings.length, 0);
+});
+
+test("parseRetryCount falls back on empty, missing, or invalid input", () => {
+  const core = createCoreMock();
+  assert.equal(parseRetryCount(undefined, core), DEFAULT_RETRY_COUNT);
+  assert.equal(parseRetryCount(null, core), DEFAULT_RETRY_COUNT);
+  assert.equal(parseRetryCount("", core), DEFAULT_RETRY_COUNT);
+  assert.equal(parseRetryCount("   ", core), DEFAULT_RETRY_COUNT);
+  assert.equal(core.warnings.length, 0);
+
+  assert.equal(parseRetryCount("abc", core), DEFAULT_RETRY_COUNT);
+  assert.equal(parseRetryCount("-2", core), DEFAULT_RETRY_COUNT);
+  assert.equal(parseRetryCount("1.5", core), DEFAULT_RETRY_COUNT);
+  assert.equal(core.warnings.length, 3);
+  for (const warning of core.warnings) {
+    assert.match(warning, /Invalid retry_count/);
+  }
+});
+
+test("parseRetryDelay accepts non-negative floats", () => {
+  const core = createCoreMock();
+  assert.equal(parseRetryDelay("0", core), 0);
+  assert.equal(parseRetryDelay("1.5", core), 1.5);
+  assert.equal(parseRetryDelay("  30  ", core), 30);
+  assert.equal(core.warnings.length, 0);
+});
+
+test("parseRetryDelay falls back on empty, missing, or invalid input", () => {
+  const core = createCoreMock();
+  assert.equal(parseRetryDelay(undefined, core), DEFAULT_RETRY_DELAY);
+  assert.equal(parseRetryDelay(null, core), DEFAULT_RETRY_DELAY);
+  assert.equal(parseRetryDelay("", core), DEFAULT_RETRY_DELAY);
+  assert.equal(parseRetryDelay("   ", core), DEFAULT_RETRY_DELAY);
+  assert.equal(core.warnings.length, 0);
+
+  assert.equal(parseRetryDelay("abc", core), DEFAULT_RETRY_DELAY);
+  assert.equal(parseRetryDelay("-1", core), DEFAULT_RETRY_DELAY);
+  assert.equal(parseRetryDelay("NaN", core), DEFAULT_RETRY_DELAY);
+  assert.equal(core.warnings.length, 3);
+  for (const warning of core.warnings) {
+    assert.match(warning, /Invalid retry_delay/);
+  }
+});
+
+test("isRetriableError flags 5xx and 429, ignores 4xx and unknown errors", () => {
+  assert.equal(isRetriableError(createHttpError(500)), true);
+  assert.equal(isRetriableError(createHttpError(502)), true);
+  assert.equal(isRetriableError(createHttpError(503)), true);
+  assert.equal(isRetriableError(createHttpError(504)), true);
+  assert.equal(isRetriableError(createHttpError(599)), true);
+  assert.equal(isRetriableError(createHttpError(429)), true);
+
+  assert.equal(isRetriableError(createHttpError(400)), false);
+  assert.equal(isRetriableError(createHttpError(401)), false);
+  assert.equal(isRetriableError(createHttpError(403)), false);
+  assert.equal(isRetriableError(createHttpError(404)), false);
+  assert.equal(isRetriableError(createHttpError(422)), false);
+  assert.equal(isRetriableError(createHttpError(200)), false);
+
+  assert.equal(isRetriableError(new Error("boom")), false);
+  assert.equal(isRetriableError(null), false);
+  assert.equal(isRetriableError(undefined), false);
+  const weird = new Error("nope");
+  weird.status = "503";
+  assert.equal(isRetriableError(weird), false);
+});
+
+test("withRetry returns immediately on success without sleeping", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  const result = await withRetry(
+    async () => {
+      calls += 1;
+      return "ok";
+    },
+    {
+      retryCount: 3,
+      retryDelay: 5,
+      sleep,
+      core,
+      label: "test",
+    },
+  );
+
+  assert.equal(result, "ok");
+  assert.equal(calls, 1);
+  assert.deepEqual(sleep.calls, []);
+  assert.equal(core.warnings.length, 0);
+});
+
+test("withRetry retries on 5xx and succeeds when transient errors clear", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  const errors = [
+    createHttpError(503, "first"),
+    createHttpError(502, "second"),
+  ];
+  let calls = 0;
+  const result = await withRetry(
+    async () => {
+      calls += 1;
+      if (errors.length > 0) {
+        throw errors.shift();
+      }
+      return { data: 42 };
+    },
+    {
+      retryCount: 6,
+      retryDelay: 10,
+      sleep,
+      core,
+      label: "pulls.list",
+    },
+  );
+
+  assert.deepEqual(result, { data: 42 });
+  assert.equal(calls, 3);
+  assert.deepEqual(sleep.calls, [10_000, 10_000]);
+  assert.equal(core.warnings.length, 2);
+  assert.match(core.warnings[0], /pulls\.list.*HTTP 503.*attempt 1\/6/);
+  assert.match(core.warnings[1], /pulls\.list.*HTTP 502.*attempt 2\/6/);
+});
+
+test("withRetry retries on 429 status", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  const result = await withRetry(
+    async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw createHttpError(429, "rate limited");
+      }
+      return "done";
+    },
+    {
+      retryCount: 2,
+      retryDelay: 1,
+      sleep,
+      core,
+      label: "api",
+    },
+  );
+
+  assert.equal(result, "done");
+  assert.equal(calls, 2);
+  assert.deepEqual(sleep.calls, [1000]);
+});
+
+test("withRetry does not retry on 4xx errors", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      withRetry(
+        async () => {
+          calls += 1;
+          throw createHttpError(404, "not found");
+        },
+        {
+          retryCount: 6,
+          retryDelay: 10,
+          sleep,
+          core,
+          label: "user",
+        },
+      ),
+    /not found/,
+  );
+
+  assert.equal(calls, 1);
+  assert.deepEqual(sleep.calls, []);
+  assert.equal(core.warnings.length, 0);
+});
+
+test("withRetry does not retry errors without numeric status", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      withRetry(
+        async () => {
+          calls += 1;
+          throw new Error("network meltdown");
+        },
+        {
+          retryCount: 6,
+          retryDelay: 10,
+          sleep,
+          core,
+          label: "x",
+        },
+      ),
+    /network meltdown/,
+  );
+
+  assert.equal(calls, 1);
+  assert.deepEqual(sleep.calls, []);
+});
+
+test("withRetry exhausts retries and throws the last error", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      withRetry(
+        async () => {
+          calls += 1;
+          throw createHttpError(500, `attempt ${calls}`);
+        },
+        {
+          retryCount: 3,
+          retryDelay: 7,
+          sleep,
+          core,
+          label: "exhaust",
+        },
+      ),
+    /attempt 4/,
+  );
+
+  assert.equal(calls, 4);
+  assert.deepEqual(sleep.calls, [7000, 7000, 7000]);
+  assert.equal(core.warnings.length, 3);
+});
+
+test("withRetry with retryCount=0 throws immediately on retriable error", async () => {
+  const sleep = createTrackingSleep();
+  const core = createCoreMock();
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      withRetry(
+        async () => {
+          calls += 1;
+          throw createHttpError(503, "no retries");
+        },
+        {
+          retryCount: 0,
+          retryDelay: 10,
+          sleep,
+          core,
+          label: "zero",
+        },
+      ),
+    /no retries/,
+  );
+
+  assert.equal(calls, 1);
+  assert.deepEqual(sleep.calls, []);
+  assert.equal(core.warnings.length, 0);
+});
+
+test("runAction in time mode retries paginate on 5xx and succeeds", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-01T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, paginateCalls } = createGithubMock({
+    paginateFailures: [
+      createHttpError(503, "Service Unavailable"),
+      createHttpError(502, "Bad Gateway"),
+    ],
+    paginateResult: [
+      {
+        number: 901,
+        title: "Resilient PR",
+        html_url: "https://github.com/nova/github-actions/pull/901",
+        merged_at: "2026-07-01T11:00:00Z",
+        user: { login: "alice" },
+      },
+    ],
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    sleep,
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain",
+      INPUT_TIMEZONE: "Europe/Berlin",
+    },
+  });
+
+  assert.equal(paginateCalls.length, 3);
+  assert.deepEqual(sleep.calls, [10_000, 10_000]);
+  assert.equal(core.outputs.should_build, "true");
+  assert.equal(core.outputs.pr_numbers, "901");
+  assert.equal(core.warnings.length, 2);
+  assert.match(core.warnings[0], /pulls\.list.*HTTP 503/);
+  assert.match(core.warnings[1], /pulls\.list.*HTTP 502/);
+});
+
+test("runAction in time mode propagates paginate error after exhausting retries", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-02T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const failures = [
+    createHttpError(503, "fail-1"),
+    createHttpError(503, "fail-2"),
+    createHttpError(503, "fail-3"),
+  ];
+  const { github, paginateCalls } = createGithubMock({
+    paginateFailures: failures,
+  });
+
+  await assert.rejects(
+    () =>
+      runAction({
+        github,
+        context,
+        core,
+        execSync: () => {
+          throw new Error("execSync should not be used in time mode");
+        },
+        sleep,
+        env: {
+          INPUT_SRC_REF: "",
+          INPUT_DST_REF: "main",
+          INPUT_HOURS: "24",
+          INPUT_RELEASE_NOTES_FORMAT: "plain",
+          INPUT_TIMEZONE: "Europe/Berlin",
+          INPUT_RETRY_COUNT: "2",
+          INPUT_RETRY_DELAY: "3",
+        },
+      }),
+    /fail-3/,
+  );
+
+  assert.equal(paginateCalls.length, 3);
+  assert.deepEqual(sleep.calls, [3000, 3000]);
+  assert.equal(core.warnings.length, 2);
+});
+
+test("runAction in time mode does not retry on 4xx and surfaces the error", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-03T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, paginateCalls } = createGithubMock({
+    paginateFailures: [createHttpError(404, "branch not found")],
+  });
+
+  await assert.rejects(
+    () =>
+      runAction({
+        github,
+        context,
+        core,
+        execSync: () => {
+          throw new Error("execSync should not be used in time mode");
+        },
+        sleep,
+        env: {
+          INPUT_SRC_REF: "",
+          INPUT_DST_REF: "main",
+          INPUT_HOURS: "24",
+          INPUT_RELEASE_NOTES_FORMAT: "plain",
+          INPUT_TIMEZONE: "Europe/Berlin",
+        },
+      }),
+    /branch not found/,
+  );
+
+  assert.equal(paginateCalls.length, 1);
+  assert.deepEqual(sleep.calls, []);
+});
+
+test("runAction in diff mode retries listPullRequestsAssociatedWithCommit on 5xx", async () => {
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, commitCalls } = createGithubMock({
+    prsByCommit: {
+      c1: [
+        {
+          number: 701,
+          title: "Recovered PR",
+          html_url: "https://github.com/nova/github-actions/pull/701",
+          merged_at: "2026-08-01T10:00:00Z",
+          user: { login: "alice" },
+        },
+      ],
+    },
+    commitFailures: {
+      c1: [
+        createHttpError(502, "Bad Gateway"),
+        createHttpError(504, "Gateway Timeout"),
+      ],
+    },
+  });
+
+  const execSync = createExecSyncMock({
+    "git rev-parse refs/remotes/origin/release-7": "source-7\n",
+    "git rev-list origin/main..source-7 --reverse": "c1\n",
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync,
+    sleep,
+    env: {
+      INPUT_SRC_REF: "release-7",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain",
+      INPUT_TIMEZONE: "UTC",
+      INPUT_RETRY_COUNT: "5",
+      INPUT_RETRY_DELAY: "2",
+    },
+  });
+
+  assert.deepEqual(commitCalls, ["c1", "c1", "c1"]);
+  assert.deepEqual(sleep.calls, [2000, 2000]);
+  assert.equal(core.outputs.pr_numbers, "701");
+  assert.equal(core.outputs.should_build, "true");
+  assert.equal(core.warnings.length, 2);
+  assert.match(
+    core.warnings[0],
+    /listPullRequestsAssociatedWithCommit.*HTTP 502/,
+  );
+});
+
+test("runAction retries getByUsername on 5xx and resolves the author name", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-10T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, userCalls } = createGithubMock({
+    paginateResult: [
+      {
+        number: 401,
+        title: "Persistent PR",
+        html_url: "https://github.com/nova/github-actions/pull/401",
+        merged_at: "2026-07-10T11:00:00Z",
+        user: { login: "alice" },
+      },
+    ],
+    userNamesByHandle: {
+      alice: "Alice Doe",
+    },
+    userHttpFailures: {
+      alice: [createHttpError(500, "boom")],
+    },
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    sleep,
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
+      INPUT_TIMEZONE: "UTC",
+    },
+  });
+
+  assert.deepEqual(userCalls, ["alice", "alice"]);
+  assert.deepEqual(sleep.calls, [10_000]);
+  assert.match(core.outputs.release_notes, /alice\(Alice Doe\)/);
+});
+
+test("runAction getByUsername 4xx is not retried and falls back to empty name", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-11T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, userCalls } = createGithubMock({
+    paginateResult: [
+      {
+        number: 411,
+        title: "Ghost PR",
+        html_url: "https://github.com/nova/github-actions/pull/411",
+        merged_at: "2026-07-11T11:00:00Z",
+        user: { login: "ghost" },
+      },
+    ],
+    userHttpFailures: {
+      ghost: [createHttpError(404, "not found")],
+    },
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    sleep,
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
+      INPUT_TIMEZONE: "UTC",
+    },
+  });
+
+  assert.deepEqual(userCalls, ["ghost"]);
+  assert.deepEqual(sleep.calls, []);
+  assert.match(core.outputs.release_notes, /ghost\(\)/);
+});
+
+test("runAction getByUsername gives up after exhausting retries and falls back to empty name", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-12T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, userCalls } = createGithubMock({
+    paginateResult: [
+      {
+        number: 421,
+        title: "Always failing user",
+        html_url: "https://github.com/nova/github-actions/pull/421",
+        merged_at: "2026-07-12T11:00:00Z",
+        user: { login: "broken" },
+      },
+    ],
+    userHttpFailures: {
+      broken: [
+        createHttpError(503, "1"),
+        createHttpError(503, "2"),
+        createHttpError(503, "3"),
+      ],
+    },
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    sleep,
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain-ext-v1",
+      INPUT_TIMEZONE: "UTC",
+      INPUT_RETRY_COUNT: "2",
+      INPUT_RETRY_DELAY: "4",
+    },
+  });
+
+  assert.deepEqual(userCalls, ["broken", "broken", "broken"]);
+  assert.deepEqual(sleep.calls, [4000, 4000]);
+  assert.match(core.outputs.release_notes, /broken\(\)/);
+});
+
+test("runAction warns on invalid retry inputs and applies defaults", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-15T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, paginateCalls } = createGithubMock({
+    paginateFailures: [createHttpError(503, "transient")],
+    paginateResult: [],
+  });
+
+  await runAction({
+    github,
+    context,
+    core,
+    execSync: () => {
+      throw new Error("execSync should not be used in time mode");
+    },
+    sleep,
+    env: {
+      INPUT_SRC_REF: "",
+      INPUT_DST_REF: "main",
+      INPUT_HOURS: "24",
+      INPUT_RELEASE_NOTES_FORMAT: "plain",
+      INPUT_TIMEZONE: "Europe/Berlin",
+      INPUT_RETRY_COUNT: "abc",
+      INPUT_RETRY_DELAY: "xyz",
+    },
+  });
+
+  assert.ok(core.warnings.some((w) => /Invalid retry_count/.test(w)));
+  assert.ok(core.warnings.some((w) => /Invalid retry_delay/.test(w)));
+  assert.equal(paginateCalls.length, 2);
+  assert.deepEqual(sleep.calls, [DEFAULT_RETRY_DELAY * 1000]);
+});
+
+test("runAction with retry_count=0 stops retrying paginate after the first failure", async (t) => {
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-07-16T12:00:00Z");
+  t.after(() => {
+    Date.now = realNow;
+  });
+
+  const core = createCoreMock();
+  const sleep = createTrackingSleep();
+  const { github, paginateCalls } = createGithubMock({
+    paginateFailures: [createHttpError(503, "no retries please")],
+  });
+
+  await assert.rejects(
+    () =>
+      runAction({
+        github,
+        context,
+        core,
+        execSync: () => {
+          throw new Error("execSync should not be used in time mode");
+        },
+        sleep,
+        env: {
+          INPUT_SRC_REF: "",
+          INPUT_DST_REF: "main",
+          INPUT_HOURS: "24",
+          INPUT_RELEASE_NOTES_FORMAT: "plain",
+          INPUT_TIMEZONE: "Europe/Berlin",
+          INPUT_RETRY_COUNT: "0",
+        },
+      }),
+    /no retries please/,
+  );
+
+  assert.equal(paginateCalls.length, 1);
+  assert.deepEqual(sleep.calls, []);
 });

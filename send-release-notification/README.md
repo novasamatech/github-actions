@@ -11,12 +11,18 @@ Uses Jinja2 templates to render provider-specific HTML: Telegram (inline markup 
   uses: novasamatech/github-actions/send-release-notification@v3
   with:
     platform: Android
+    release_info: |
+      Version: 1.2.3
+      Build number: 1234
     pr_list: |
       - [#377](https://github.com/org/repo/pull/377): Fix scroll position on rotation
       - [#384](https://github.com/org/repo/pull/384): Fix SSO login redirect
+    download_links_format: inline
     download_links: |
-      Firebase: https://appdistribution.firebase.dev/i/abc123
-      APK: https://s3.amazonaws.com/builds/app-release.apk
+      [Firebase](https://appdistribution.firebase.dev/i/e0627763965f4fed)
+      [.apk (GitHub)](https://github.com/paritytech/polkadot-app-android-v2/releases)
+      [.apk (s3 bucket)](https://polkadot-app-artefacts.s3.fr-par.scw.cloud/android/nightly/polkadot-app.apk)
+      [WebPage (user:april)](https://nightly.personhood.dev/)
     bot_url: ${{ secrets.NOTIFICATION_BOT_URL }}
     bot_api_token: ${{ secrets.NOTIFICATION_BOT_TOKEN }}
     telegram_chat_ids: "-100500, -100501"
@@ -30,7 +36,9 @@ Uses Jinja2 templates to render provider-specific HTML: Telegram (inline markup 
 |---|---|---|---|
 | `platform` | yes | — | Platform name (e.g., `Android`, `iOS`) |
 | `pr_list` | yes | — | Multiline list of merged PRs in markdown format: `- [#N](url): Title` |
-| `download_links` | yes | — | Multiline download links (plain text, URLs are auto-linked) |
+| `release_info` | no | `""` | Multiline plain text rendered after the changelog header and before the PR list |
+| `download_links` | yes | — | Multiline download links. Supports Markdown named links and plain entries whose URLs are auto-linked |
+| `download_links_format` | no | `list` | Render downloads as one entry per line (`list`) or on one line separated by `, ` (`inline`) |
 | `bot_url` | yes | — | Notification bot base URL |
 | `bot_api_token` | yes | — | API token for the notification bot service |
 | `telegram_chat_ids` | no | `""` | Comma-separated Telegram chat IDs |
@@ -41,6 +49,24 @@ Uses Jinja2 templates to render provider-specific HTML: Telegram (inline markup 
 | `request_timeout` | no | `60` | Per-attempt HTTP socket timeout in seconds |
 
 At least one of `telegram_chat_ids` or `matrix_room_ids` must be provided.
+
+### Download links
+
+Markdown named links render as compact clickable labels in Telegram and Matrix HTML:
+
+```yaml
+download_links_format: inline
+download_links: |
+  [Firebase](https://example.com)
+  [.apk (GitHub)](https://github.com/example/releases)
+```
+
+The Matrix plain-text fallback strips the Markdown syntax while retaining each URL, for example `Firebase (https://example.com)`. Existing plain entries remain supported:
+
+```yaml
+download_links: |
+  Firebase: https://example.com
+```
 
 ### Retry behavior
 
@@ -57,7 +83,7 @@ With the defaults, a single destination can take up to about **9 minutes** in th
 ## How it works
 
 1. Parses `pr_list` into structured items with raw text and HTML-linked versions
-2. Parses `download_links`, auto-wrapping plain URLs in `<a>` tags
+2. Parses Markdown named links and auto-wraps URLs in existing plain download entries
 3. Renders provider-specific templates via Jinja2:
    - **Telegram**: inline HTML only (`<b>`, `<a>`, etc.) with literal newlines
    - **Matrix**: rich HTML (`<h3>`, `<ul>`, `<li>`, etc.) + plain-text fallback
@@ -79,9 +105,6 @@ Dependencies are declared at the repository root in [`requirements.txt`](../requ
 ```bash
 # from repo root
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-cd send-release-notification
-pytest test_*.py -v
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pytest -q send-release-notification/test_*.py
 ```

@@ -1,10 +1,16 @@
 Changelog {{ platform }} - {{ date }}
-
+{% if release_info %}
+{{ release_info }}
+{% endif %}
 List of merged PRs:
 {% for pr in prs -%}
 - {{ pr.raw }}
 {% endfor %}
 Download:
+{% if download_links_format == "inline" -%}
+{{ downloads | map(attribute="raw") | join(", ") }}
+{% else -%}
 {% for link in downloads -%}
 {{ link.raw }}
 {% endfor -%}
+{% endif -%}

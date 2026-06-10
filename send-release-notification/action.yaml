@@ -10,9 +10,17 @@ inputs:
   pr_list:
     description: 'Multiline list of merged PRs in markdown format (e.g., "- [#123](url): Title")'
     required: true
+  release_info:
+    description: 'Optional multiline plain-text release information rendered after the changelog header'
+    required: false
+    default: ''
   download_links:
-    description: 'Multiline platform-specific download links (plain text, URLs will be auto-linked)'
+    description: 'Multiline platform-specific download links (plain text or Markdown named links)'
     required: true
+  download_links_format:
+    description: 'Download links layout: list or inline'
+    required: false
+    default: 'list'
   bot_url:
     description: 'Notification bot base URL (e.g., https://bot.example.org)'
     required: true
@@ -56,7 +64,9 @@ runs:
       env:
         INPUT_PLATFORM: ${{ inputs.platform }}
         INPUT_PR_LIST: ${{ inputs.pr_list }}
+        INPUT_RELEASE_INFO: ${{ inputs.release_info }}
         INPUT_DOWNLOAD_LINKS: ${{ inputs.download_links }}
+        INPUT_DOWNLOAD_LINKS_FORMAT: ${{ inputs.download_links_format }}
         INPUT_BOT_URL: ${{ inputs.bot_url }}
         INPUT_BOT_API_TOKEN: ${{ inputs.bot_api_token }}
         INPUT_TELEGRAM_CHAT_IDS: ${{ inputs.telegram_chat_ids }}

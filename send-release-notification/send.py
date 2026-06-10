@@ -24,6 +24,7 @@ from jinja2 import Environment, FileSystemLoader
 DEFAULT_RETRY_COUNT = 6
 DEFAULT_RETRY_DELAY = 20.0
 DEFAULT_REQUEST_TIMEOUT = 60.0
+DEFAULT_DOWNLOAD_LINKS_FORMAT = "list"
 
 
 # ---------------------------------------------------------------------------
@@ -103,11 +104,33 @@ def parse_download_links(raw: str) -> list[dict]:
         line = line.strip()
         if not line:
             continue
+        named_link = re.fullmatch(r"\[([^\]]+)\]\((https?://.+)\)", line)
+        if named_link:
+            label, url = named_link.groups()
+            items.append({
+                "raw": f"{label} ({url})",
+                "linked": f'<a href="{url}">{label}</a>',
+            })
+            continue
         items.append({
             "raw": line,
             "linked": linkify_urls(line),
         })
     return items
+
+
+def parse_download_links_format(
+    value: str,
+    default: str = DEFAULT_DOWNLOAD_LINKS_FORMAT,
+) -> str:
+    """Parse the download links layout, falling back to list when invalid."""
+    parsed = (value or "").strip().lower()
+    if not parsed:
+        return default
+    if parsed not in {"list", "inline"}:
+        print(f"::warning::invalid download_links_format={value!r}, using default {default!r}")
+        return default
+    return parsed
 
 
 def parse_comma_list(value: str) -> list[str]:
@@ -343,6 +366,10 @@ def main() -> None:
     platform = os.environ["INPUT_PLATFORM"]
     pr_list_raw = os.environ["INPUT_PR_LIST"]
     download_links_raw = os.environ["INPUT_DOWNLOAD_LINKS"]
+    release_info = os.environ.get("INPUT_RELEASE_INFO", "").strip()
+    download_links_format = parse_download_links_format(
+        os.environ.get("INPUT_DOWNLOAD_LINKS_FORMAT", "")
+    )
     date = datetime.now(timezone.utc).strftime("%d.%m.%Y")
     bot_url = os.environ["INPUT_BOT_URL"].rstrip("/")
     bot_token = os.environ["INPUT_BOT_API_TOKEN"]
@@ -364,8 +391,11 @@ def main() -> None:
     template_ctx = {
         "platform": platform,
         "date": date,
+        "release_info": release_info,
+        "release_info_lines": release_info.splitlines(),
         "prs": prs,
         "downloads": downloads,
+        "download_links_format": download_links_format,
     }
 
     # Load Jinja2 templates

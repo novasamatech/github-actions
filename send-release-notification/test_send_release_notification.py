@@ -26,6 +26,7 @@ MODULE_SPEC.loader.exec_module(send)
 DEFAULT_RETRY_COUNT = send.DEFAULT_RETRY_COUNT
 DEFAULT_RETRY_DELAY = send.DEFAULT_RETRY_DELAY
 DEFAULT_REQUEST_TIMEOUT = send.DEFAULT_REQUEST_TIMEOUT
+DEFAULT_DOWNLOAD_LINKS_FORMAT = send.DEFAULT_DOWNLOAD_LINKS_FORMAT
 http_post = send.http_post
 http_post_with_retry = send.http_post_with_retry
 linkify_urls = send.linkify_urls
@@ -33,6 +34,7 @@ main = send.main
 markdown_links_to_html = send.markdown_links_to_html
 parse_comma_list = send.parse_comma_list
 parse_download_links = send.parse_download_links
+parse_download_links_format = send.parse_download_links_format
 parse_pr_list = send.parse_pr_list
 parse_retry_count = send.parse_retry_count
 parse_retry_delay = send.parse_retry_delay
@@ -198,16 +200,58 @@ class TestParsePrList:
 
 
 class TestParseDownloadLinks:
-    def test_basic(self):
+    def test_existing_plain_url_behavior(self):
         raw = "Firebase: https://firebase.com/app\nAPK: https://s3.com/app.apk"
         items = parse_download_links(raw)
         assert len(items) == 2
         assert items[0]["raw"] == "Firebase: https://firebase.com/app"
-        assert '<a href="https://firebase.com/app">' in items[0]["linked"]
+        assert items[0]["linked"] == (
+            'Firebase: <a href="https://firebase.com/app">https://firebase.com/app</a>'
+        )
+
+    def test_markdown_named_link(self):
+        items = parse_download_links("[.apk (GitHub)](https://github.com/example/releases)")
+        assert items == [{
+            "raw": ".apk (GitHub) (https://github.com/example/releases)",
+            "linked": '<a href="https://github.com/example/releases">.apk (GitHub)</a>',
+        }]
+
+    def test_mixed_named_links_and_plain_urls(self):
+        items = parse_download_links(
+            "[Firebase](https://example.com)\n"
+            "APK: https://s3.com/app.apk"
+        )
+        assert items == [
+            {
+                "raw": "Firebase (https://example.com)",
+                "linked": '<a href="https://example.com">Firebase</a>',
+            },
+            {
+                "raw": "APK: https://s3.com/app.apk",
+                "linked": 'APK: <a href="https://s3.com/app.apk">https://s3.com/app.apk</a>',
+            },
+        ]
 
     def test_skips_empty_lines(self):
         items = parse_download_links("A: https://a.com\n\nB: https://b.com\n")
         assert len(items) == 2
+
+
+class TestParseDownloadLinksFormat:
+    def test_empty_returns_default(self):
+        assert parse_download_links_format("") == DEFAULT_DOWNLOAD_LINKS_FORMAT
+
+    def test_list(self):
+        assert parse_download_links_format("list") == "list"
+
+    def test_inline(self):
+        assert parse_download_links_format("inline") == "inline"
+
+    def test_trims_and_normalizes_case(self):
+        assert parse_download_links_format(" INLINE ") == "inline"
+
+    def test_invalid_returns_default(self):
+        assert parse_download_links_format("table") == DEFAULT_DOWNLOAD_LINKS_FORMAT
 
 
 class TestParseCommaList:
@@ -352,6 +396,11 @@ class TestShouldRetry:
 
 
 class TestRetryDefaults:
+    def test_default_download_links_format(self):
+        assert DEFAULT_DOWNLOAD_LINKS_FORMAT == action_input_default(
+            ACTION_FILE, "download_links_format"
+        )
+
     def test_default_retry_count(self):
         assert DEFAULT_RETRY_COUNT == int(action_input_default(ACTION_FILE, "retry_count"))
 
@@ -381,6 +430,9 @@ def template_ctx():
     return {
         "platform": "Android",
         "date": "16.03.2026",
+        "release_info": "",
+        "release_info_lines": [],
+        "download_links_format": "list",
         "prs": [
             {"raw": "#377: Fix scroll", "linked": '<a href="https://github.com/org/repo/pull/377">#377</a>: Fix scroll'},
             {"raw": "#384: Fix SSO", "linked": '<a href="https://github.com/org/repo/pull/384">#384</a>: Fix SSO'},
@@ -406,6 +458,32 @@ class TestTelegramTemplate:
         result = jinja_env.get_template("telegram.html.j2").render(**template_ctx).strip()
         assert "https://firebase.com/app" in result
         assert "https://s3.com/app.apk" in result
+
+    def test_default_list_rendering(self, jinja_env, template_ctx):
+        result = jinja_env.get_template("telegram.html.j2").render(**template_ctx).strip()
+        download_section = result.split("<b>Download:</b>\n", 1)[1]
+        assert download_section == (
+            'Firebase: <a href="https://firebase.com/app">https://firebase.com/app</a>\n'
+            'APK: <a href="https://s3.com/app.apk">https://s3.com/app.apk</a>'
+        )
+
+    def test_inline_named_links_render_clickable_labels(self, jinja_env, template_ctx):
+        template_ctx["download_links_format"] = "inline"
+        template_ctx["downloads"] = parse_download_links(
+            "[Firebase](https://example.com)\n"
+            "[.apk (GitHub)](https://github.com/example/releases)"
+        )
+        result = jinja_env.get_template("telegram.html.j2").render(**template_ctx).strip()
+        assert result.split("<b>Download:</b>\n", 1)[1] == (
+            '<a href="https://example.com">Firebase</a>, '
+            '<a href="https://github.com/example/releases">.apk (GitHub)</a>'
+        )
+
+    def test_release_info_after_header_before_prs(self, jinja_env, template_ctx):
+        template_ctx["release_info"] = "Version: 1.2.3\nBuild number: 1234"
+        result = jinja_env.get_template("telegram.html.j2").render(**template_ctx).strip()
+        assert result.index("<b>Changelog") < result.index("Version: 1.2.3")
+        assert result.index("Build number: 1234") < result.index("<b>List of merged PRs:</b>")
 
     def test_no_block_level_html(self, jinja_env, template_ctx):
         """Telegram does not support block-level HTML elements."""
@@ -433,6 +511,26 @@ class TestMatrixHtmlTemplate:
         result = jinja_env.get_template("matrix.html.j2").render(**template_ctx).strip()
         assert result.count("<ul>") == 2  # PRs + Downloads
 
+    def test_inline_named_links_render_clickable_labels(self, jinja_env, template_ctx):
+        template_ctx["download_links_format"] = "inline"
+        template_ctx["downloads"] = parse_download_links(
+            "[Firebase](https://example.com)\n"
+            "[.apk (GitHub)](https://github.com/example/releases)"
+        )
+        result = jinja_env.get_template("matrix.html.j2").render(**template_ctx).strip()
+        assert result.count("<ul>") == 1  # PRs only
+        assert (
+            '<p><a href="https://example.com">Firebase</a>, '
+            '<a href="https://github.com/example/releases">.apk (GitHub)</a></p>'
+        ) in result
+
+    def test_release_info_after_header_before_prs(self, jinja_env, template_ctx):
+        template_ctx["release_info_lines"] = ["Version: 1.2.3", "Build number: 1234"]
+        result = jinja_env.get_template("matrix.html.j2").render(**template_ctx).strip()
+        assert "<p>Version: 1.2.3<br>Build number: 1234</p>" in result
+        assert result.index("<h3>Changelog") < result.index("Version: 1.2.3")
+        assert result.index("Build number: 1234") < result.index("<p><b>List of merged PRs:</b>")
+
 
 class TestMatrixPlainTemplate:
     def test_renders_plain_text(self, jinja_env, template_ctx):
@@ -449,6 +547,25 @@ class TestMatrixPlainTemplate:
         result = jinja_env.get_template("matrix_plain.txt.j2").render(**template_ctx).strip()
         assert "Firebase: https://firebase.com/app" in result
         assert "<a href=" not in result
+
+    def test_inline_fallback_strips_markdown_and_includes_urls(self, jinja_env, template_ctx):
+        template_ctx["download_links_format"] = "inline"
+        template_ctx["downloads"] = parse_download_links(
+            "[Firebase](https://example.com)\n"
+            "[.apk (GitHub)](https://github.com/example/releases)"
+        )
+        result = jinja_env.get_template("matrix_plain.txt.j2").render(**template_ctx).strip()
+        assert "[Firebase](" not in result
+        assert result.split("Download:\n", 1)[1] == (
+            "Firebase (https://example.com), "
+            ".apk (GitHub) (https://github.com/example/releases)"
+        )
+
+    def test_release_info_after_header_before_prs(self, jinja_env, template_ctx):
+        template_ctx["release_info"] = "Version: 1.2.3\nBuild number: 1234"
+        result = jinja_env.get_template("matrix_plain.txt.j2").render(**template_ctx).strip()
+        assert result.index("Changelog") < result.index("Version: 1.2.3")
+        assert result.index("Build number: 1234") < result.index("List of merged PRs:")
 
 
 # ---------------------------------------------------------------------------
@@ -863,6 +980,48 @@ class TestMain:
         assert "<h3>" in payload["formatted_text"]
         assert "<li>" in payload["formatted_text"]
         assert "<a href=" not in payload["text"]  # plain text has no HTML
+
+    def test_telegram_inline_downloads_and_release_info(self, mock_server):
+        url, reqs, _ = mock_server
+        env = self._env(
+            url,
+            INPUT_TELEGRAM_CHAT_IDS="-100",
+            INPUT_RELEASE_INFO="Version: 1.2.3\nBuild number: 1234",
+            INPUT_DOWNLOAD_LINKS_FORMAT="inline",
+            INPUT_DOWNLOAD_LINKS=(
+                "[Firebase](https://example.com)\n"
+                "[.apk (GitHub)](https://github.com/example/releases)"
+            ),
+        )
+        self._run_main(env)
+        body = reqs[0]["body"]
+        assert body.index("<b>Changelog") < body.index("Version: 1.2.3")
+        assert body.index("Build number: 1234") < body.index("<b>List of merged PRs:</b>")
+        assert body.split("<b>Download:</b>\n", 1)[1] == (
+            '<a href="https://example.com">Firebase</a>, '
+            '<a href="https://github.com/example/releases">.apk (GitHub)</a>'
+        )
+
+    def test_matrix_inline_downloads_include_plain_text_fallback(self, mock_server):
+        url, reqs, _ = mock_server
+        env = self._env(
+            url,
+            INPUT_MATRIX_ROOM_IDS="!r:m.org",
+            INPUT_DOWNLOAD_LINKS_FORMAT="inline",
+            INPUT_DOWNLOAD_LINKS=(
+                "[Firebase](https://example.com)\n"
+                "APK: https://s3.com/app.apk"
+            ),
+        )
+        self._run_main(env)
+        payload = json.loads(reqs[0]["body"])
+        assert (
+            '<p><a href="https://example.com">Firebase</a>, '
+            'APK: <a href="https://s3.com/app.apk">https://s3.com/app.apk</a></p>'
+        ) in payload["formatted_text"]
+        assert payload["text"].split("Download:\n", 1)[1] == (
+            "Firebase (https://example.com), APK: https://s3.com/app.apk"
+        )
 
     def test_date_auto_computed(self, mock_server):
         """Date is computed internally, not from env."""

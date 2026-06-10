@@ -6,6 +6,9 @@
   <table>, <tr>, <td>, <th>, <hr>, <span>, <div>, etc.
 #}
 <h3>Changelog {{ platform }} - {{ date }}</h3>
+{% if release_info_lines -%}
+<p>{% for line in release_info_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+{% endif -%}
 <p><b>List of merged PRs:</b></p>
 <ul>
 {% for pr in prs -%}
@@ -13,8 +16,12 @@
 {% endfor -%}
 </ul>
 <p><b>Download:</b></p>
+{% if download_links_format == "inline" -%}
+<p>{{ downloads | map(attribute="linked") | join(", ") }}</p>
+{% else -%}
 <ul>
 {% for link in downloads -%}
 <li>{{ link.linked }}</li>
 {% endfor -%}
 </ul>
+{% endif -%}
